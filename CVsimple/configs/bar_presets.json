@@ -1,0 +1,382 @@
+{
+  "name": "Enhanced HP/MP Presets",
+  "version": "2.0",
+  "description": "Rozszerzone konfiguracje presetów ze względnymi współrzędnymi",
+  "categories": {
+    "rpg": [
+      "standard_rpg",
+      "isometric_rpg",
+      "mmorpg"
+    ],
+    "action": [
+      "fps_battle",
+      "action_rpg"
+    ],
+    "strategy": [
+      "rts",
+      "turn_based"
+    ]
+  },
+  "presets": {
+    "standard_rpg_1920x1080": {
+      "name": "Standard RPG 1920x1080",
+      "category": "rpg",
+      "resolution": "1920x1080",
+      "description": "Standardowa rozdzielczość dla gier RPG z paskami HP/MP",
+      "relative_coords": {
+        "hp": {
+          "x": 5.8,
+          "y": 8.1,
+          "w": 6.2,
+          "h": 0.5
+        },
+        "hp_bottom": {
+          "x": 5.8,
+          "y": 8.6,
+          "w": 6.2,
+          "h": 0.5
+        },
+        "mana": {
+          "x": 5.8,
+          "y": 9.2,
+          "w": 6.3,
+          "h": 0.5
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mana": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        }
+      },
+      "legacy_absolute": {
+        "hp": {
+          "x": 112,
+          "y": 87,
+          "w": 119,
+          "h": 5
+        },
+        "hp_bottom": {
+          "x": 112,
+          "y": 93,
+          "w": 119,
+          "h": 5
+        },
+        "mana": {
+          "x": 112,
+          "y": 99,
+          "w": 120,
+          "h": 5
+        }
+      }
+    },
+    "standard_rpg_2560x1440": {
+      "name": "Standard RPG 2560x1440",
+      "category": "rpg",
+      "resolution": "2560x1440",
+      "description": "Rozdzielczość QHD dla gier RPG",
+      "relative_coords": {
+        "hp": {
+          "x": 5.8,
+          "y": 7.6,
+          "w": 5.5,
+          "h": 0.4
+        },
+        "hp_bottom": {
+          "x": 5.8,
+          "y": 8.1,
+          "w": 5.5,
+          "h": 0.4
+        },
+        "mana": {
+          "x": 5.8,
+          "y": 8.6,
+          "w": 5.6,
+          "h": 0.4
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mana": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        }
+      },
+      "legacy_absolute": {
+        "hp": {
+          "x": 149,
+          "y": 110,
+          "w": 140,
+          "h": 6
+        },
+        "hp_bottom": {
+          "x": 149,
+          "y": 117,
+          "w": 140,
+          "h": 6
+        },
+        "mana": {
+          "x": 149,
+          "y": 124,
+          "w": 142,
+          "h": 6
+        }
+      }
+    },
+    "standard_rpg_1366x768": {
+      "name": "Standard RPG 1366x768",
+      "category": "rpg",
+      "resolution": "1366x768",
+      "description": "Popularna rozdzielczość HD dla gier RPG",
+      "relative_coords": {
+        "hp": {
+          "x": 5.8,
+          "y": 8.1,
+          "w": 6.2,
+          "h": 0.7
+        },
+        "hp_bottom": {
+          "x": 5.8,
+          "y": 8.9,
+          "w": 6.2,
+          "h": 0.7
+        },
+        "mana": {
+          "x": 5.8,
+          "y": 9.6,
+          "w": 6.3,
+          "h": 0.7
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mana": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        }
+      }
+    },
+    "standard_rpg_3840x2160": {
+      "name": "Standard RPG 4K UHD",
+      "category": "rpg",
+      "resolution": "3840x2160",
+      "description": "Rozdzielczość 4K dla gier RPG",
+      "relative_coords": {
+        "hp": {
+          "x": 5.8,
+          "y": 8.1,
+          "w": 6.2,
+          "h": 0.2
+        },
+        "hp_bottom": {
+          "x": 5.8,
+          "y": 8.4,
+          "w": 6.2,
+          "h": 0.2
+        },
+        "mana": {
+          "x": 5.8,
+          "y": 8.7,
+          "w": 6.3,
+          "h": 0.2
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mana": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        }
+      }
+    },
+    "fps_battle_1920x1080": {
+      "name": "FPS Battle 1920x1080",
+      "category": "action",
+      "resolution": "1920x1080",
+      "description": "Paski HP/MP dla gier FPS z interfejsem w rogu",
+      "relative_coords": {
+        "hp": {
+          "x": 85.0,
+          "y": 85.0,
+          "w": 12.0,
+          "h": 2.0
+        },
+        "mana": {
+          "x": 85.0,
+          "y": 90.0,
+          "w": 12.0,
+          "h": 2.0
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 0,
+          "h_max": 10,
+          "s_min": 200,
+          "v_min": 200
+        },
+        "mana": {
+          "h_min": 200,
+          "h_max": 220,
+          "s_min": 200,
+          "v_min": 200
+        }
+      }
+    },
+    "mmorpg_1920x1080": {
+      "name": "MMORPG Standard 1920x1080",
+      "category": "rpg",
+      "resolution": "1920x1080",
+      "description": "Paski dla gier MMO RPG z rozbudowanym interfejsem",
+      "relative_coords": {
+        "hp": {
+          "x": 2.0,
+          "y": 90.0,
+          "w": 15.0,
+          "h": 1.5
+        },
+        "mp": {
+          "x": 2.0,
+          "y": 94.0,
+          "w": 15.0,
+          "h": 1.5
+        },
+        "exp": {
+          "x": 2.0,
+          "y": 98.0,
+          "w": 15.0,
+          "h": 1.0
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mp": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        },
+        "exp": {
+          "h_min": 30,
+          "h_max": 60,
+          "s_min": 150,
+          "v_min": 150
+        }
+      }
+    },
+    "custom_20251130_113429": {
+      "name": "Custom Preset 2025-11-30 11:34:29",
+      "category": "custom",
+      "resolution": "custom",
+      "description": "Zapisany przez interaktywny edytor",
+      "relative_coords": {
+        "hp": {
+          "x": 112,
+          "y": 87,
+          "w": 119,
+          "h": 5
+        },
+        "mana": {
+          "x": 112,
+          "y": 99,
+          "w": 120,
+          "h": 5
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mana": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        }
+      }
+    },
+    "custom_20251130_114640": {
+      "name": "Custom Preset 2025-11-30 11:46:40",
+      "category": "custom",
+      "resolution": "custom",
+      "description": "Zapisany przez interaktywny edytor",
+      "relative_coords": {
+        "hp": {
+          "x": 112,
+          "y": 87,
+          "w": 119,
+          "h": 5
+        },
+        "mana": {
+          "x": 112,
+          "y": 99,
+          "w": 120,
+          "h": 5
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mana": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        }
+      }
+    }
+  },
+  "metadata": {
+    "created_date": "2025-11-30",
+    "author": "CV Simple Enhanced",
+    "description": "System presetów wspierający względne współrzędne dla elastyczności rozdzielczości",
+    "supported_resolutions": [
+      "1366x768",
+      "1920x1080",
+      "2560x1440",
+      "3840x2160"
+    ],
+    "coordinate_system": "relative_percentage"
+  }
+}
