@@ -33,8 +33,8 @@ from ultralytics.yolo.v8.detect import DetectionTrainer
 
 
 class CustomTrainer(DetectionTrainer):
-    def get_model(self, cfg, weights):
-        ...
+  def get_model(self, cfg, weights):
+    ...
 
 
 trainer = CustomTrainer(overrides={...})
@@ -52,21 +52,21 @@ from ultralytics.yolo.v8.detect import DetectionTrainer
 
 
 class CustomTrainer(DetectionTrainer):
-    def get_model(self, cfg, weights):
-        ...
+  def get_model(self, cfg, weights):
+    ...
 
-    def criterion(self, preds, batch):
-        # get ground truth
-        imgs = batch["imgs"]
-        bboxes = batch["bboxes"]
-        ...
-        return loss, loss_items  # see Reference-> Trainer for details on the expected format
+  def criterion(self, preds, batch):
+    # get ground truth
+    imgs = batch["imgs"]
+    bboxes = batch["bboxes"]
+    ...
+    return loss, loss_items  # see Reference-> Trainer for details on the expected format
 
 
 # callback to upload model weights
 def log_model(trainer):
-    last_weight_path = trainer.last
-    ...
+  last_weight_path = trainer.last
+  ...
 
 
 trainer = CustomTrainer(overrides={...})

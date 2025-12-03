@@ -21,21 +21,10 @@ class WindowCapture:
             'failed_captures': 0,
             'last_error': None
         }
+        # Prosta metoda logowania
+        self.log = print
 
-    def log(self, message, level="info"):
-        """Helper do logowania z poziomami"""
-        if self.logger:
-            if level == "debug":
-                self.logger.debug(message)
-            elif level == "warning":
-                self.logger.warning(message)
-            elif level == "error":
-                self.logger.error(message)
-            else:
-                self.logger.info(message)
-        else:
-            print(f"[{level.upper()}] {message}")
-
+  
     def get_window_list(self):
         """Pobiera listę wszystkich widocznych okien"""
         def enum_windows_callback(hwnd, windows):
@@ -151,7 +140,8 @@ class WindowCapture:
             width = rect[2] - rect[0]
             height = rect[3] - rect[1]
 
-            self.log(f"📐 Przechwytywanie okna: {width}x{height}", "debug")
+            # Wyłączono intensywne logi DEBUG dla wydajności
+            # self.log(f"📐 Przechwytywanie okna: {width}x{height}", "debug")
 
             if width <= 0 or height <= 0:
                 error_msg = f"Nieprawidłowe wymiary okna: {width}x{height}"
@@ -200,7 +190,7 @@ class WindowCapture:
             user32 = ctypes.windll.user32
             PW_RENDERFULLCONTENT = 0x00000002
 
-            self.log("🔍 Wykonywanie PrintWindow...", "debug")
+            # self.log("🔍 Wykonywanie PrintWindow...", "debug")
             result = user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), PW_RENDERFULLCONTENT)
 
             if not result:
@@ -210,14 +200,15 @@ class WindowCapture:
                 self.capture_stats['last_error'] = error_msg
                 return None
 
-            self.log("✅ PrintWindow wykonany pomyślnie", "debug")
+            # self.log("✅ PrintWindow wykonany pomyślnie", "debug")
 
             # Pobierz dane bitmap
             bmpinfo = saveBitMap.GetInfo()
             bmpstr = saveBitMap.GetBitmapBits(True)
 
-            self.log(f"📊 Bitmap info: width={bmpinfo['bmWidth']}, height={bmpinfo['bmHeight']}", "debug")
-            self.log(f"📊 Bitmap data length: {len(bmpstr)}", "debug")
+            # Wyłączono intensywne logi DEBUG dla wydajności
+            # self.log(f"📊 Bitmap info: width={bmpinfo['bmWidth']}, height={bmpinfo['bmHeight']}", "debug")
+            # self.log(f"📊 Bitmap data length: {len(bmpstr)}", "debug")
 
             # Metoda 1: PIL Image.frombuffer (BGRX -> RGB)
             try:
@@ -229,12 +220,13 @@ class WindowCapture:
 
                 # Konwertuj do numpy array (już RGB z PIL)
                 img_array = np.array(img)
-                self.log(f"📷 PIL konwersja: {img_array.shape}, typ: {img_array.dtype}", "debug")
+                # Wyłączono intensywne logi DEBUG dla wydajności
+                # self.log(f"📷 PIL konwersja: {img_array.shape}, typ: {img_array.dtype}", "debug")
 
                 # Waliduj i napraw obraz
                 img_array = self.validate_and_fix_image_array(img_array, "PIL capture")
                 if img_array is not None:
-                    self.log(f"✅ Obraz przechwycony przez PIL (RGB)", "debug")
+                    # self.log(f"✅ Obraz przechwycony przez PIL (RGB)", "debug")
                     self.capture_stats['successful_captures'] += 1
                     self.last_successful_capture = time.time()
                     return img_array
@@ -244,7 +236,7 @@ class WindowCapture:
 
             # Metoda 2: Bezpośrednia konwersja numpy/cv2 (BGRX -> RGB)
             try:
-                self.log("🔄 Próba bezpośredniej konwersji numpy...", "debug")
+                # self.log("🔄 Próba bezpośredniej konwersji numpy...", "debug")
 
                 # Konwertuj dane bitmap do numpy array
                 img_bgr = np.frombuffer(bmpstr, dtype=np.uint8)
@@ -266,12 +258,13 @@ class WindowCapture:
                 # POPRAWKA: Konwertuj BGR do RGB (bez kanału alpha)
                 img_array = cv2.cvtColor(img_bgr[:,:,:3], cv2.COLOR_BGR2RGB)
 
-                self.log(f"📷 Numpy konwersja: {img_array.shape}, typ: {img_array.dtype}", "debug")
+                # Wyłączono intensywne logi DEBUG dla wydajności
+                # self.log(f"📷 Numpy konwersja: {img_array.shape}, typ: {img_array.dtype}", "debug")
 
                 # Waliduj i napraw obraz
                 img_array = self.validate_and_fix_image_array(img_array, "Numpy capture")
                 if img_array is not None:
-                    self.log(f"✅ Obraz przechwycony przez numpy (BGR->RGB)", "debug")
+                    # self.log(f"✅ Obraz przechwycony przez numpy (BGR->RGB)", "debug")
                     self.capture_stats['successful_captures'] += 1
                     self.last_successful_capture = time.time()
                     return img_array

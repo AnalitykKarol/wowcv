@@ -44,8 +44,8 @@ class PlayerBarsAnalyzer:
         # HP thresholds with hysteresis
         self.hp_warning_threshold = 50.0
         self.hp_warning_recovery_threshold = 80.0
-        self.hp_critical_threshold = 80.0
-        self.hp_critical_recovery_threshold = 80.0
+        self.hp_critical_threshold = 25.0  # FIXED: Critical at 25% HP (not 80%!)
+        self.hp_critical_recovery_threshold = 85.0  # Recovery when back to 85% HP
 
         # HP threshold state tracking
         self.hp_above_50 = True

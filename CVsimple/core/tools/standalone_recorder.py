@@ -419,14 +419,8 @@ class DataRecorder:
 
                 last_frame_time = current_time
 
-                # Progress info
-                if self.frame_count % 100 == 0:
-                    elapsed = current_time - self.start_time
-                    fps = self.frame_count / elapsed if elapsed > 0 else 0
-                    print(f"📈 Frame {self.frame_count}, FPS: {fps:.1f}")
-
+        
             except Exception as e:
-                print(f"❌ Recording error: {e}")
                 time.sleep(0.1)
 
     def _save_session(self):

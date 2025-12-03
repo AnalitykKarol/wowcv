@@ -1138,9 +1138,6 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                             self.log_message(f"🖼️ Zapisałem {len(self.latest_detections)} wykryć dla podglądu", "DEBUG")
 
                         else:
-                            # BRAK WYKRYĆ
-                            self.log_message(f"🔍 DETECTION DEBUG: BRAK WYKRYĆ - len(detections) = {len(detections)}",
-                                             "DEBUG")
                             self.latest_detections = []
 
                             # Combat mode bez wykryć - PRZEKAŻ PUSTĄ LISTĘ

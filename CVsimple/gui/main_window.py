@@ -14,6 +14,8 @@ from core.window_capture import WindowCapture
 from core.yolo_detector import OptimizedYOLODetector
 from core.combat_controller import ReactiveCombatController
 from core.hp_bar_analyzer import PlayerBarsAnalyzer  # NOWY IMPORT
+from utils.preset_manager import PresetManager  # NOWY IMPORT
+from gui.preset_dialog import PresetDialog  # NOWY IMPORT
 
 class MainWindow:
     def __init__(self, root, logger):
@@ -32,6 +34,8 @@ class MainWindow:
 
         self.combat_controller = ReactiveCombatController(logger)
 
+        # NOWY: Preset Manager
+        self.preset_manager = PresetManager(logger=logger)
 
         # NOWY: Player Bars Analyzer
         self.bars_analyzer = PlayerBarsAnalyzer(logger)
@@ -59,14 +63,14 @@ class MainWindow:
         self.bars_last_update_label = None
 
         # NOWE: Pozycje pasków (domyślne wartości)
-        self.hp_x_var = tk.StringVar(value="112")
-        self.hp_y_var = tk.StringVar(value="87")
-        self.hp_w_var = tk.StringVar(value="119")
+        self.hp_x_var = tk.StringVar(value="120")
+        self.hp_y_var = tk.StringVar(value="62")
+        self.hp_w_var = tk.StringVar(value="135")
         self.hp_h_var = tk.StringVar(value="5")
 
-        self.mana_x_var = tk.StringVar(value="112")
-        self.mana_y_var = tk.StringVar(value="99")
-        self.mana_w_var = tk.StringVar(value="120")
+        self.mana_x_var = tk.StringVar(value="120")
+        self.mana_y_var = tk.StringVar(value="76")
+        self.mana_w_var = tk.StringVar(value="135")
         self.mana_h_var = tk.StringVar(value="5")
 
         # NOWE: Aktualne wartości pasków
@@ -531,17 +535,17 @@ class MainWindow:
         """Aplikuje pozycje pasków z ustawień"""
         try:
             # HP pozycja
-            hp_x = int(self.hp_x_var.get())
-            hp_y = int(self.hp_y_var.get())
-            hp_w = int(self.hp_w_var.get())
-            hp_h = int(self.hp_h_var.get())
+            hp_x = int(float(self.hp_x_var.get()))
+            hp_y = int(float(self.hp_y_var.get()))
+            hp_w = int(float(self.hp_w_var.get()))
+            hp_h = int(float(self.hp_h_var.get()))
             self.bars_analyzer.set_hp_position_px(hp_x, hp_y, hp_w, hp_h)
 
             # Mana pozycja
-            mana_x = int(self.mana_x_var.get())
-            mana_y = int(self.mana_y_var.get())
-            mana_w = int(self.mana_w_var.get())
-            mana_h = int(self.mana_h_var.get())
+            mana_x = int(float(self.mana_x_var.get()))
+            mana_y = int(float(self.mana_y_var.get()))
+            mana_w = int(float(self.mana_w_var.get()))
+            mana_h = int(float(self.mana_h_var.get()))
             self.bars_analyzer.set_mana_position_px(mana_x, mana_y, mana_w, mana_h)
 
             self.log_message(f"📊 Pozycje pasków zaktualizowane: HP({hp_x},{hp_y},{hp_w},{hp_h}) Mana({mana_x},{mana_y},{mana_w},{mana_h})")
@@ -668,17 +672,7 @@ class MainWindow:
                     self.bars_last_update = time.time()
                     self.root.after(0, self.update_bars_display)
 
-                    # Debug log co 100 analiz
-                    if analysis_count % 100 == 0:
-                        hp_success = both_results['hp_result'].get('success', False)
-                        mana_success = both_results['mana_result'].get('success', False)
-                        self.log_message(f"📊 Analiza #{analysis_count}: HP:{self.current_hp:.1f}%({hp_success}) Mana:{self.current_mana:.1f}%({mana_success})")
-
-                else:
-                    # Brak ramki
-                    if analysis_count % 50 == 0:  # Log co 50 prób
-                        self.log_message("⚠️ Analiza pasków: Brak ramki", "WARNING")
-
+  
                 # Kontrola FPS
                 time.sleep(max(0.02, 1/bars_fps))
 
@@ -1127,6 +1121,21 @@ Użyj przycisków powyżej aby przeprowadzić testy:
         ttk.Button(bars_config_frame, text="🔄 Resetuj domyślne",
                   command=self.reset_bars_positions).pack(side='left', padx=(0, 5))
 
+        # NOWE: Przyciski zarządzania presetami
+        preset_buttons_frame = ttk.Frame(bars_settings_frame)
+        preset_buttons_frame.pack(fill='x', pady=(10, 0))
+
+        ttk.Button(preset_buttons_frame, text="⚙️ Zarządzaj presetami",
+                  command=self.open_preset_manager).pack(side='left', padx=(0, 5))
+        ttk.Button(preset_buttons_frame, text="📂 Wczytaj preset",
+                  command=self.load_preset_from_file).pack(side='left', padx=(0, 5))
+        ttk.Button(preset_buttons_frame, text="💾 Zapisz jako preset",
+                  command=self.save_current_as_preset).pack(side='left', padx=(0, 5))
+        ttk.Button(preset_buttons_frame, text="🔄 Zastosuj preset",
+                  command=self.apply_current_preset).pack(side='left', padx=(0, 5))
+        ttk.Button(preset_buttons_frame, text="✏️ Aktualizuj preset",
+                  command=self.update_current_preset_runtime).pack(side='left', padx=(5, 0))
+
         # Ustawienia progów
         thresholds_frame = ttk.LabelFrame(bars_settings_frame, text="⚠️ Progi ostrzeżeń", padding=10)
         thresholds_frame.pack(fill='x', pady=(10, 0))
@@ -1522,10 +1531,10 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
         POPRAWIONA: Rysuje wykrycia YOLO na obrazie z lepszą obsługą błędów
         """
         if not detections or len(detections) == 0:
-            self.log_message("🖼️ Brak wykryć do narysowania", "DEBUG")
+            # self.log_message("🖼️ Brak wykryć do narysowania", "DEBUG")
             return image
 
-        self.log_message(f"🖼️ Rysuję {len(detections)} wykryć na obrazie", "DEBUG")
+        # self.log_message(f"🖼️ Rysuję {len(detections)} wykryć na obrazie", "DEBUG")
 
         try:
             result_image = image.copy()
@@ -1534,7 +1543,7 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                 self.log_message("❌ Błąd: obraz do rysowania jest pusty", "ERROR")
                 return image
 
-            self.log_message(f"🖼️ Obraz do rysowania: {result_image.shape}, typ: {result_image.dtype}", "DEBUG")
+            # self.log_message(f"🖼️ Obraz do rysowania: {result_image.shape}, typ: {result_image.dtype}", "DEBUG")
 
             # Kolory dla różnych typów wykryć
             colors = {
@@ -1561,9 +1570,7 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                     name = detection.get('name', 'unknown')
                     confidence = detection.get('confidence', 0.0)
 
-                    self.log_message(f"🖼️ Wykrycie #{i + 1}: {name} ({confidence:.2f}) - Box: [{x1}, {y1}, {x2}, {y2}]",
-                                     "DEBUG")
-
+                    
                     # Walidacja współrzędnych
                     if x2 <= x1 or y2 <= y1:
                         self.log_message(
@@ -1603,14 +1610,13 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
                     successful_draws += 1
-                    self.log_message(f"✅ Narysowano wykrycie #{i + 1}: {name}", "DEBUG")
+                    # self.log_message(f"✅ Narysowano wykrycie #{i + 1}: {name}", "DEBUG")
 
                 except Exception as draw_error:
                     self.log_message(f"❌ Błąd rysowania wykrycia #{i + 1}: {str(draw_error)}", "ERROR")
                     continue
 
-            self.log_message(f"🖼️ Narysowano {successful_draws}/{len(detections)} wykryć", "INFO")
-
+            
             if successful_draws == 0:
                 self.log_message("⚠️ Nie udało się narysować żadnego wykrycia!", "WARNING")
                 return image  # Zwróć oryginalny obraz
@@ -1705,8 +1711,7 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                     self.last_frame_time = time.time()
                     self.root.after(0, self.scale_and_display_image, frame)
                 else:
-                    self.log_message("⚠️ Podgląd: Nie udało się przechwycić ramki", "WARNING")
-
+                    pass
                 time.sleep(1/30)
 
             except Exception as e:
@@ -1727,8 +1732,7 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
             self.preview_canvas.delete("no_preview")
 
             if img_array is None or img_array.size == 0:
-                self.log_message("⚠️ Preview: Pusty obraz", "WARNING")
-                return
+                                return
 
             canvas_width = self.preview_canvas.winfo_width()
             canvas_height = self.preview_canvas.winfo_height()
@@ -1739,7 +1743,6 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                     debug_image = self.hp_analyzer.create_debug_image(img_array)
                     if debug_image is not None:
                         # Convert debug image to PhotoImage and display on canvas
-                        from PIL import Image
                         pil_image = Image.fromarray(debug_image)
                         self.debug_photo = tk.PhotoImage(pil_image)
 
@@ -1768,30 +1771,30 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
 
             display_image = img_array.copy()
 
-            self.log_message(f"🖼️ Oryginalny obraz: {display_image.shape}, typ: {display_image.dtype}", "DEBUG")
+            # self.log_message(f"🖼️ Oryginalny obraz: {display_image.shape}, typ: {display_image.dtype}", "DEBUG")
 
             # Rysuj wykrycia YOLO jeśli aktywne
             detections_to_draw = None
             if hasattr(self, 'yolo_active') and self.yolo_active:
                 if hasattr(self, 'latest_detections') and self.latest_detections:
                     detections_to_draw = self.latest_detections
-                    self.log_message(f"🖼️ Mam {len(detections_to_draw)} wykryć YOLO do narysowania", "DEBUG")
+                    # self.log_message(f"🖼️ Mam {len(detections_to_draw)} wykryć YOLO do narysowania", "DEBUG")
 
             # Rysuj wykrycia jeśli są
             if detections_to_draw and len(detections_to_draw) > 0:
                 try:
-                    self.log_message(f"🖼️ Rozpoczynam rysowanie {len(detections_to_draw)} wykryć YOLO", "DEBUG")
+                    # self.log_message(f"🖼️ Rozpoczynam rysowanie {len(detections_to_draw)} wykryć YOLO", "DEBUG")
                     display_image = self.draw_detections_on_image(display_image, detections_to_draw)
-                    self.log_message(f"🖼️ Zakończono rysowanie wykryć YOLO", "DEBUG")
+                    # # # self.log_message(f"🖼️ Zakończono rysowanie wykryć YOLO", "DEBUG")
                 except Exception as draw_error:
                     self.log_message(f"❌ Błąd rysowania wykryć YOLO: {str(draw_error)}", "ERROR")
 
             # NOWE: Rysuj regiony HP/Mana jeśli analiza pasków jest aktywna
             if self.bars_analysis_active:
                 try:
-                    self.log_message(f"🖼️ Rysowanie regionów HP/Mana", "DEBUG")
+                    # self.log_message(f"🖼️ Rysowanie regionów HP/Mana", "DEBUG")
                     display_image = self.draw_bars_on_image(display_image)
-                    self.log_message(f"🖼️ Zakończono rysowanie regionów pasków", "DEBUG")
+                    # # self.log_message(f"🖼️ Zakończono rysowanie regionów pasków", "DEBUG")
                 except Exception as bars_error:
                     self.log_message(f"❌ Błąd rysowania regionów pasków: {str(bars_error)}", "ERROR")
 
@@ -1804,9 +1807,9 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
             new_width = max(1, int(img_width * scale))
             new_height = max(1, int(img_height * scale))
 
-            self.log_message(
-                f"🖼️ Przeskalowuję z {img_width}x{img_height} do {new_width}x{new_height} (scale: {scale:.3f})",
-                "DEBUG")
+            # self.log_message(
+                # f"🖼️ Przeskalowuję z {img_width}x{img_height} do {new_width}x{new_height} (scale: {scale:.3f})",
+                # "DEBUG")
 
             # Upewnij się że obraz jest uint8
             if display_image.dtype != np.uint8:
@@ -1832,7 +1835,7 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                 self.preview_canvas.image = img_tk
                 self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all"))
 
-                self.log_message(f"✅ Obraz wyświetlony w preview", "DEBUG")
+                # self.log_message(f"✅ Obraz wyświetlony w preview", "DEBUG")
 
             except Exception as pil_error:
                 self.log_message(f"❌ Błąd konwersji PIL: {str(pil_error)}", "ERROR")
@@ -1885,12 +1888,17 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
     def detection_loop(self):
         """Pętla wykrywania YOLO z lepszą obsługą błędów - POPRAWIONA Z DEBUG"""
         detection_count = 0
-        fps = int(self.fps_scale.get())
-        confidence_threshold = float(self.confidence_scale.get())
 
-        self.log_message(f"🤖 Rozpoczęto Enhanced YOLO Detection (conf: {confidence_threshold:.2f}, FPS: {fps})")
+        self.log_message("🤖 Rozpoczęto Enhanced YOLO Detection (dynamic threshold)")
+
+        last_confidence_log = 0
 
         while self.yolo_active:
+            # Aktualizuj threshold i FPS w każdej klatce!
+            fps = int(self.fps_scale.get())
+            confidence_threshold = float(self.confidence_scale.get())
+
+            
             try:
                 if not self.selected_window:
                     break
@@ -1915,36 +1923,25 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                             detection_count += 1
                             self.detection_count += len(detections)
 
-                            if detection_count % 30 == 0:
-                                self.log_message(f"🤖 Enhanced YOLO: {len(detections)} wykryć (#{detection_count})")
-
                             # Przekaż wykrycia do Combat Controller
                             for i, det in enumerate(detections):
                                 name = det.get('name', 'unknown')
                                 conf = det.get('confidence', 0)
                                 pos = (det.get('center_x', 0), det.get('center_y', 0))
-                                self.log_message(f"   #{i + 1}: {name} (conf: {conf:.3f}) at {pos}", "DEBUG")
 
                             # Tryb walki - PRZEKAŻ WYKRYCIA
                             if self.combat_mode:
                                 try:
                                     self.combat_controller.update(self.selected_window['hwnd'], detections)
-
-                                    if detection_count % 100 == 0:
-                                        status = self.combat_controller.get_status()
-                                        self.log_message(f"⚔️ Combat: {status}")
-
                                 except Exception as combat_error:
                                     self.log_message(f"Błąd trybu walki: {str(combat_error)}", "ERROR")
 
                             # Zapisz wykrycia dla podglądu
                             self.latest_detections = detections.copy() if detections else []
-                            self.log_message(f"🖼️ Zapisałem {len(self.latest_detections)} wykryć dla podglądu", "DEBUG")
+                            # self.log_message(f"🖼️ Zapisałem {len(self.latest_detections)} wykryć dla podglądu", "DEBUG")
 
                         else:
                             # BRAK WYKRYĆ
-                            self.log_message(f"🔍 DETECTION DEBUG: BRAK WYKRYĆ - len(detections) = {len(detections)}",
-                                             "DEBUG")
                             self.latest_detections = []
 
                             # Combat mode bez wykryć - PRZEKAŻ PUSTĄ LISTĘ
@@ -1961,8 +1958,7 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                         self.latest_detections = []
 
                 else:
-                    self.log_message("⚠️ Detection: Nie udało się przechwycić ramki", "WARNING")
-
+                    
                     # NAWET BEZ RAMKI WYŚLIJ PUSTĄ LISTĘ
                     if self.combat_mode:
                         try:
@@ -2022,9 +2018,14 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
             self.preview_canvas.config(cursor="")
 
             # Wyczyść edytowalne regiony
-            for tag in list(self.preview_canvas.find_all()):
-                if "edit_rect" in tag:
-                    self.preview_canvas.delete(tag)
+            for item_id in list(self.preview_canvas.find_all()):
+                try:
+                    tags = self.preview_canvas.gettags(item_id)
+                    if tags and any("edit_rect" in str(tag) for tag in tags):
+                        self.preview_canvas.delete(item_id)
+                except Exception as e:
+                    # Skip items that can't be processed
+                    continue
             self.region_rectangles.clear()
 
     def on_canvas_click(self, event):
@@ -2174,8 +2175,19 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
             self.mana_h_var.set(str(h))
 
     def save_current_preset(self):
-        """Zapisuje aktualne współrzędne jako nowy preset"""
+        """Zapisuje aktualne współrzędne jako nowy preset z podaną nazwą"""
         try:
+            # Poproś użytkownika o nazwę presetu
+            from tkinter import simpledialog
+            preset_name = simpledialog.askstring(
+                "Zapisz Preset",
+                "Podaj nazwę presetu:",
+                parent=self.root
+            )
+
+            if not preset_name:
+                return  # Użytkownik anulował
+
             # Pobierz aktualne współrzędne
             hp_coords = {
                 "x": int(self.hp_x_var.get()),
@@ -2190,18 +2202,20 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                 "h": int(self.mana_h_var.get())
             }
 
-            # Importuj json i zapisz
+            # Importuj json, time i zapisz
             import json
+            import time
+            from datetime import datetime
             with open("configs/bar_presets.json", "r", encoding="utf-8") as f:
                 presets_data = json.load(f)
 
-            # Dodaj nowy preset
-            new_preset_name = f"custom_{time.strftime('%Y%m%d_%H%M%S')}"
+            # Dodaj nowy preset z podaną nazwą
+            new_preset_name = f"custom_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             new_preset = {
-                "name": f"Custom Preset {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                "name": preset_name,
                 "category": "custom",
                 "resolution": "custom",  # Placeholder
-                "description": "Zapisany przez interaktywny edytor",
+                "description": f"Zapisany przez użytkownika: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 "relative_coords": {
                     "hp": hp_coords,
                     "mana": mana_coords
@@ -2218,9 +2232,284 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
             with open("configs/bar_presets.json", "w", encoding="utf-8") as f:
                 json.dump(presets_data, f, indent=2, ensure_ascii=False)
 
-            self.log_message(f"✅ Preset zapisany: {new_preset_name}")
-            messagebox.showinfo("Sukces", f"Custom preset zapisany jako:\n{new_preset_name}")
+            self.log_message(f"✅ Preset zapisany: {preset_name} ({new_preset_name})")
+            messagebox.showinfo("Sukces", f"Preset zapisany jako:\n{preset_name}")
 
         except Exception as e:
             self.log_message(f"❌ Błąd zapisu presetu: {str(e)}", "ERROR")
             messagebox.showerror("Błąd", f"Nie można zapisać presetu:\n{str(e)}")
+
+    # NOWE: Funkcje do zarządzania presetami
+    def open_preset_manager(self):
+        """Otwiera okno dialogowe do zarządzania presetami"""
+        try:
+            dialog = PresetDialog(self, self.preset_manager, self.logger)
+            result = dialog.show()
+
+            if result:
+                # Jeśli wybrano preset, zastosuj go
+                self.apply_preset_by_id(result)
+
+        except Exception as e:
+            self.log_message(f"❌ Błąd otwierania menedżera presetów: {str(e)}", "ERROR")
+            messagebox.showerror("Błąd", f"Nie można otworzyć menedżera presetów:\n{str(e)}")
+
+    def apply_preset_by_id(self, preset_id: str):
+        """Zastosowuje preset po ID"""
+        try:
+            preset = self.preset_manager.get_preset_by_id(preset_id)
+            if not preset:
+                self.log_message(f"❌ Nie znaleziono presetu: {preset_id}", "ERROR")
+                return
+
+            # Pobierz współrzędne
+            coords = self.preset_manager.get_preset_coords(preset_id, force_absolute=True)
+            if not coords:
+                self.log_message(f"❌ Preset {preset_id} nie ma współrzędnych", "ERROR")
+                return
+
+            # Zastosuj współrzędne HP
+            if 'hp' in coords:
+                hp = coords['hp']
+                self.hp_x_var.set(str(hp.get('x', 112)))
+                self.hp_y_var.set(str(hp.get('y', 87)))
+                self.hp_w_var.set(str(hp.get('w', 119)))
+                self.hp_h_var.set(str(hp.get('h', 5)))
+
+            # Zastosuj współrzędne Mana
+            if 'mana' in coords:
+                mana = coords['mana']
+                self.mana_x_var.set(str(mana.get('x', 112)))
+                self.mana_y_var.set(str(mana.get('y', 99)))
+                self.mana_w_var.set(str(mana.get('w', 120)))
+                self.mana_h_var.set(str(mana.get('h', 5)))
+            elif 'mp' in coords:
+                mp = coords['mp']
+                self.mana_x_var.set(str(mp.get('x', 112)))
+                self.mana_y_var.set(str(mp.get('y', 99)))
+                self.mana_w_var.set(str(mp.get('w', 120)))
+                self.mana_h_var.set(str(mp.get('h', 5)))
+
+            # Zastosuj do analizatora
+            self.apply_bars_positions()
+
+            # Ustaw jako aktualny
+            self.preset_manager.set_current_preset(preset_id)
+
+            preset_name = preset.get('name', preset_id)
+            self.log_message(f"✅ Zastosowano preset: {preset_name}")
+
+        except Exception as e:
+            self.log_message(f"❌ Błąd stosowania presetu: {str(e)}", "ERROR")
+            messagebox.showerror("Błąd", f"Nie można zastosować presetu:\n{str(e)}")
+
+    def update_current_preset_runtime(self):
+        """Aktualizuje aktualnie wybrany preset w runtime"""
+        try:
+            current_id = self.preset_manager.get_current_preset_id()
+            if not current_id:
+                messagebox.showinfo("Info", "Nie wybrano żadnego presetu do aktualizacji")
+                return
+
+            # Pobierz aktualne wartości z GUI
+            try:
+                hp_coords = {
+                    'x': int(self.hp_x_var.get()),
+                    'y': int(self.hp_y_var.get()),
+                    'w': int(self.hp_w_var.get()),
+                    'h': int(self.hp_h_var.get())
+                }
+            except ValueError:
+                messagebox.showerror("Błąd", "Nieprawidłowe współrzędne HP - wymagane liczby")
+                return
+
+            try:
+                mana_coords = {
+                    'x': int(self.mana_x_var.get()),
+                    'y': int(self.mana_y_var.get()),
+                    'w': int(self.mana_w_var.get()),
+                    'h': int(self.mana_h_var.get())
+                }
+            except ValueError:
+                messagebox.showerror("Błąd", "Nieprawidłowe współrzędne MP - wymagane liczby")
+                return
+
+            # Zaktualizuj preset w runtime z przekazaniem analyzer
+            if self.preset_manager.update_preset_runtime(
+                current_id,
+                hp_coords=hp_coords,
+                mana_coords=mana_coords,
+                apply_immediately=True
+            ):
+                preset_name = "nieznany"
+                preset = self.preset_manager.get_preset_by_id(current_id)
+                if preset:
+                    preset_name = preset.get('name', current_id)
+                    # Natychmiastowe odświeżenie analyzer przez menedżera
+                    if hasattr(self, 'bars_analyzer'):
+                        # Przekaż analyzer do menedżera do odświeżenia
+                        self.preset_manager._refresh_current_preset(self.bars_analyzer)
+                        self.apply_bars_positions()  # Natychmiastowe zastosowanie
+
+                self.log_message(f"🔄 Zaktualizowano preset w runtime: {preset_name}")
+                messagebox.showinfo("Sukces", f"Zaktualizowano preset: {preset_name}")
+            else:
+                messagebox.showerror("Błąd", "Nie udało się zaktualizować presetu")
+
+        except Exception as e:
+            self.log_message(f"❌ Błąd aktualizacji presetu: {str(e)}", "ERROR")
+            messagebox.showerror("Błąd", f"Nie można zaktualizować presetu:\n{str(e)}")
+
+    def load_preset_from_file(self):
+        """Wczytuje preset z pliku JSON"""
+        try:
+            from tkinter import filedialog
+
+            file_path = filedialog.askopenfilename(
+                title="Wybierz plik presetu",
+                filetypes=[("Pliki JSON", "*.json"), ("Wszystkie pliki", "*.*")]
+            )
+
+            if not file_path:
+                return
+
+            # Importuj preset przez menedżer
+            new_id = self.preset_manager.import_preset(file_path)
+
+            if new_id:
+                messagebox.showinfo("Sukces", f"Zaimportowano preset jako: {new_id}")
+                # Zastosuj nowy preset
+                self.apply_preset_by_id(new_id)
+            else:
+                messagebox.showerror("Błąd", "Nie udało się zaimportować presetu")
+
+        except Exception as e:
+            self.log_message(f"❌ Błąd wczytywania presetu: {str(e)}", "ERROR")
+            messagebox.showerror("Błąd", f"Nie można wczytać presetu:\n{str(e)}")
+
+    def save_current_as_preset(self):
+        """Zapisuje aktualne ustawienia jako nowy preset"""
+        try:
+            # Pobierz aktualne współrzędne
+            try:
+                hp_coords = {
+                    'x': int(self.hp_x_var.get()),
+                    'y': int(self.hp_y_var.get()),
+                    'w': int(self.hp_w_var.get()),
+                    'h': int(self.hp_h_var.get())
+                }
+                mana_coords = {
+                    'x': int(self.mana_x_var.get()),
+                    'y': int(self.mana_y_var.get()),
+                    'w': int(self.mana_w_var.get()),
+                    'h': int(self.mana_h_var.get())
+                }
+            except ValueError:
+                messagebox.showerror("Błąd", "Nieprawidłowe wartości współrzędnych")
+                return
+
+            # Dialog z nazwą
+            from tkinter import simpledialog
+            preset_name = simpledialog.askstring(
+                "Zapisz Preset",
+                "Podaj nazwę presetu:",
+                initialvalue=f"Preset_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
+
+            if not preset_name:
+                return
+
+            # Dodaj preset przez menedżer
+            new_id = self.preset_manager.add_custom_preset(
+                name=preset_name,
+                hp_coords=hp_coords,
+                mana_coords=mana_coords,
+                resolution="custom"
+            )
+
+            if new_id:
+                self.log_message(f"✅ Zapisano preset: {preset_name}")
+                messagebox.showinfo("Sukces", f"Zapisano preset jako:\n{preset_name}")
+
+                # Zastosuj nowy preset
+                self.preset_manager.set_current_preset(new_id)
+            else:
+                messagebox.showerror("Błąd", "Nie udało się zapisać presetu")
+
+        except Exception as e:
+            self.log_message(f"❌ Błąd zapisu presetu: {str(e)}", "ERROR")
+            messagebox.showerror("Błąd", f"Nie można zapisać presetu:\n{str(e)}")
+
+    def apply_current_preset(self):
+        """Zastosowuje aktualnie wybrany preset"""
+        current_id = self.preset_manager.get_current_preset_id()
+
+        if current_id:
+            self.apply_preset_by_id(current_id)
+        else:
+            messagebox.showinfo("Informacja", "Nie wybrano żadnego presetu.\nUżyj 'Zarządzaj presetami' aby wybrać preset.")
+
+    def test_bar_position(self, bar_type: str, x: int, y: int, w: int, h: int):
+        """Testuje pozycję paska rysując prostokąt na podglądzie"""
+        try:
+            if not hasattr(self, 'preview_canvas') or not self.preview_canvas:
+                messagebox.showinfo("Test", f"Test pozycji {bar_type.upper()}:\nX: {x}, Y: {y}\nSzer: {w}, Wys: {h}")
+                return
+
+            # Rysuj tymczasowy prostokąt
+            import time
+
+            if hasattr(self, 'test_rect_id'):
+                self.preview_canvas.delete(self.test_rect_id)
+
+            if hasattr(self, 'test_rect_label'):
+                self.preview_canvas.delete(self.test_rect_label)
+
+            # Konwertuj współrzędne na skalę canvasa
+            canvas_width = self.preview_canvas.winfo_width()
+            canvas_height = self.preview_canvas.winfo_height()
+
+            if canvas_width <= 1 or canvas_height <= 1:
+                messagebox.showinfo("Test", f"Test pozycji {bar_type.upper()}:\nX: {x}, Y: {y}\nSzer: {w}, Wys: {h}")
+                return
+
+            # Skaluj współrzędne
+            scale_x = canvas_width / (self.selected_window['width'] if self.selected_window else 1920)
+            scale_y = canvas_height / (self.selected_window['height'] if self.selected_window else 1080)
+
+            canvas_x = x * scale_x
+            canvas_y = y * scale_y
+            canvas_w = w * scale_x
+            canvas_h = h * scale_y
+
+            color = "#00ff00" if bar_type == "hp" else "#0080ff"
+
+            # Narysuj prostokąt
+            self.test_rect_id = self.preview_canvas.create_rectangle(
+                canvas_x, canvas_y, canvas_x + canvas_w, canvas_y + canvas_h,
+                outline=color, width=3, tags="test"
+            )
+
+            # Dodaj etykietę
+            self.test_rect_label = self.preview_canvas.create_text(
+                canvas_x + canvas_w/2, canvas_y - 10,
+                text=f"TEST {bar_type.upper()}: {w}x{h}",
+                fill=color, font=('Arial', 10, 'bold'), tags="test"
+            )
+
+            # Usuń po 3 sekundach
+            self.root.after(3000, self._clear_test_rect)
+
+            self.log_message(f"🧪 Test pozycji {bar_type.upper()}: ({x},{y}) {w}x{h}")
+
+        except Exception as e:
+            self.log_message(f"❌ Błąd testowania pozycji: {str(e)}", "ERROR")
+            messagebox.showerror("Błąd", f"Błąd testowania:\n{str(e)}")
+
+    def _clear_test_rect(self):
+        """Usuwa prostokąt testowy"""
+        try:
+            if hasattr(self, 'preview_canvas') and self.preview_canvas:
+                self.preview_canvas.delete("test")
+        except:
+            pass

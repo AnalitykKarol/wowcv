@@ -19,28 +19,28 @@
   },
   "presets": {
     "standard_rpg_1920x1080": {
-      "name": "Standard RPG 1920x1080",
+      "name": "Standard RPG 1920x1080 - Test Config",
       "category": "rpg",
       "resolution": "1920x1080",
-      "description": "Standardowa rozdzielczość dla gier RPG z paskami HP/MP",
+      "description": "Standardowa rozdzielczość z koordynatami test (120,62,135,5)",
       "relative_coords": {
         "hp": {
-          "x": 5.8,
-          "y": 8.1,
-          "w": 6.2,
-          "h": 0.5
+          "x": 6.25,
+          "y": 5.7407407407407405,
+          "w": 7.03125,
+          "h": 0.4629629629629629
         },
         "hp_bottom": {
-          "x": 5.8,
-          "y": 8.6,
-          "w": 6.2,
-          "h": 0.5
+          "x": 6.25,
+          "y": 6.481481481481481,
+          "w": 7.03125,
+          "h": 0.4629629629629629
         },
         "mana": {
-          "x": 5.8,
-          "y": 9.2,
-          "w": 6.3,
-          "h": 0.5
+          "x": 6.25,
+          "y": 6.944444444444445,
+          "w": 7.03125,
+          "h": 0.4629629629629629
         }
       },
       "colors": {
@@ -59,21 +59,21 @@
       },
       "legacy_absolute": {
         "hp": {
-          "x": 112,
-          "y": 87,
-          "w": 119,
+          "x": 120,
+          "y": 62,
+          "w": 135,
           "h": 5
         },
         "hp_bottom": {
-          "x": 112,
-          "y": 93,
-          "w": 119,
+          "x": 120,
+          "y": 70,
+          "w": 135,
           "h": 5
         },
         "mana": {
-          "x": 112,
-          "y": 99,
-          "w": 120,
+          "x": 120,
+          "y": 75,
+          "w": 135,
           "h": 5
         }
       }
@@ -305,15 +305,15 @@
       "description": "Zapisany przez interaktywny edytor",
       "relative_coords": {
         "hp": {
-          "x": 112,
-          "y": 87,
-          "w": 119,
+          "x": 120,
+          "y": 62,
+          "w": 135,
           "h": 5
         },
         "mana": {
-          "x": 112,
-          "y": 99,
-          "w": 120,
+          "x": 120,
+          "y": 76,
+          "w": 135,
           "h": 5
         }
       },
@@ -348,6 +348,150 @@
           "x": 112,
           "y": 99,
           "w": 120,
+          "h": 5
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mana": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        }
+      }
+    },
+    "custom_20251130_204106": {
+      "name": "wow fullhd2",
+      "category": "custom",
+      "resolution": "custom",
+      "description": "Utworzony: 2025-11-30 20:41:06",
+      "relative_coords": {
+        "hp": {
+          "x": 120,
+          "y": 62,
+          "w": 135,
+          "h": 5
+        },
+        "mana": {
+          "x": 120,
+          "y": 76,
+          "w": 135,
+          "h": 5
+        }
+      },
+      "legacy_absolute": {
+        "hp": {
+          "x": 120,
+          "y": 62,
+          "w": 135,
+          "h": 5
+        },
+        "mana": {
+          "x": 120,
+          "y": 76,
+          "w": 135,
+          "h": 5
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mana": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        }
+      }
+    },
+    "custom_20251130_204517": {
+      "name": "wowek",
+      "category": "custom",
+      "resolution": "custom",
+      "description": "Utworzony: 2025-11-30 20:45:17",
+      "relative_coords": {
+        "hp": {
+          "x": 120,
+          "y": 62,
+          "w": 135,
+          "h": 5
+        },
+        "mana": {
+          "x": 120,
+          "y": 76,
+          "w": 135,
+          "h": 5
+        }
+      },
+      "legacy_absolute": {
+        "hp": {
+          "x": 112,
+          "y": 87,
+          "w": 119,
+          "h": 5
+        },
+        "mana": {
+          "x": 112,
+          "y": 99,
+          "w": 120,
+          "h": 5
+        }
+      },
+      "colors": {
+        "hp": {
+          "h_min": 50,
+          "h_max": 80,
+          "s_min": 100,
+          "v_min": 100
+        },
+        "mana": {
+          "h_min": 100,
+          "h_max": 130,
+          "s_min": 80,
+          "v_min": 80
+        }
+      }
+    },
+    "custom_20251202_142837": {
+      "name": "test",
+      "category": "custom",
+      "resolution": "custom",
+      "description": "Utworzony: 2025-12-02 14:28:37",
+      "relative_coords": {
+        "hp": {
+          "x": 6.25,
+          "y": 5.7407407407407405,
+          "w": 7.03125,
+          "h": 0.4629629629629629
+        },
+        "mana": {
+          "x": 6.25,
+          "y": 6.944444444444445,
+          "w": 7.03125,
+          "h": 0.4629629629629629
+        }
+      },
+      "legacy_absolute": {
+        "hp": {
+          "x": 120,
+          "y": 62,
+          "w": 135,
+          "h": 5
+        },
+        "mana": {
+          "x": 120,
+          "y": 75,
+          "w": 135,
           "h": 5
         }
       },

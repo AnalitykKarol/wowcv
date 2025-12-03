@@ -31,6 +31,9 @@ class OptimizedYOLODetector:
         self.inference_times = []
         self.max_time_samples = 20
 
+        # Prosta metoda logowania
+        self.log = print
+
         # NOWE: Aplikuj fix PyTorch 2.6+ na początku
         self._apply_pytorch26_fix()
 
@@ -43,10 +46,10 @@ class OptimizedYOLODetector:
         Aplikuje patch dla torch.load aby modele YOLO ładowały się z weights_only=False
         """
         torch_version = torch.__version__
-        self.log(f"🔍 PyTorch version: {torch_version}")
+        print(f"🔍 PyTorch version: {torch_version}")
 
         if version.parse(torch_version) >= version.parse("2.6.0"):
-            self.log("🔧 Aplikuję fix dla PyTorch 2.6+ weights_only issue...")
+            print("🔧 Aplikuję fix dla PyTorch 2.6+ weights_only issue...")
 
             # Zapisz oryginalną funkcję torch.load
             if not hasattr(torch, '_original_load'):
@@ -67,7 +70,7 @@ class OptimizedYOLODetector:
                     # Jeśli to plik .pt i nie ma weights_only, ustaw na False
                     if is_pt_file and 'weights_only' not in kwargs:
                         kwargs['weights_only'] = False
-                        self.log(f"📥 Ładuję model {f} z weights_only=False")
+                        print(f"📥 Ładuję model {f} z weights_only=False")
 
                     # Wycisz ostrzeżenia o weights_only
                     with warnings.catch_warnings():
@@ -78,24 +81,11 @@ class OptimizedYOLODetector:
 
                 # Zastąp torch.load naszą wersją
                 torch.load = patched_torch_load
-                self.log("✅ PyTorch 2.6+ fix zaaplikowany - modele .pt będą ładowane z weights_only=False")
+                print("✅ PyTorch 2.6+ fix zaaplikowany - modele .pt będą ładowane z weights_only=False")
         else:
-            self.log("ℹ️ PyTorch < 2.6 - fix nie jest potrzebny")
+            print("ℹ️ PyTorch < 2.6 - fix nie jest potrzebny")
 
-    def log(self, message, level="info"):
-        """Helper do logowania"""
-        if self.logger:
-            if level == "debug":
-                self.logger.debug(message)
-            elif level == "warning":
-                self.logger.warning(message)
-            elif level == "error":
-                self.logger.error(message)
-            else:
-                self.logger.info(message)
-        else:
-            print(f"[{level.upper()}] {message}")
-
+  
     def auto_load_model(self):
         """Automatycznie ładuje model przy starcie"""
         model_paths = [
@@ -265,6 +255,17 @@ class OptimizedYOLODetector:
             self.image_validation_stats['last_error'] = error_msg
             return None
 
+    def stop_inference_thread(self):
+        """Stopuje inference - metoda wymagana przez main.py"""
+        try:
+            self.log("🔄 Zatrzymuję wątek YOLO inference...")
+            # OptimizedYOLODetector nie używa threadingu, więc tylko logujemy
+            self.model = None
+            self.model_loaded = False
+            self.log("✅ YOLO inference zatrzymany")
+        except Exception as e:
+            self.log(f"❌ Błąd zatrzymywania inference: {str(e)}", "error")
+
     def detect(self, image, confidence_threshold=0.15):
         """
         GŁÓWNA METODA WYKRYWANIA - UPROSZCZONA I DZIAŁAJĄCA
@@ -283,8 +284,6 @@ class OptimizedYOLODetector:
             # 2. Uruchom YOLO
             start_time = time.time()
 
-            self.log(f"🔍 Uruchamiam YOLO: obraz {validated_image.shape}, próg {confidence_threshold}")
-
             # Wycisz ostrzeżenia podczas inference
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -295,8 +294,6 @@ class OptimizedYOLODetector:
             if len(self.inference_times) > self.max_time_samples:
                 self.inference_times.pop(0)
 
-            self.log(f"🔍 YOLO zwrócił {len(results)} wyników w {inference_time:.1f}ms")
-
             # 3. Przetwórz wyniki
             detections = []
 
@@ -306,8 +303,7 @@ class OptimizedYOLODetector:
                 if hasattr(result, 'boxes') and result.boxes is not None:
                     boxes = result.boxes
 
-                    self.log(f"🔍 Znaleziono {len(boxes)} surowych detekcji")
-
+                    
                     for i, box in enumerate(boxes):
                         try:
                             # Pobierz dane z box
@@ -349,17 +345,7 @@ class OptimizedYOLODetector:
                         except Exception as box_error:
                             self.log(f"❌ Błąd przetwarzania box #{i+1}: {str(box_error)}", "error")
                             continue
-                else:
-                    self.log("⚠️ YOLO nie zwrócił żadnych boxes")
-            else:
-                self.log("⚠️ YOLO nie zwrócił żadnych wyników")
-
-            # 4. Podsumowanie
-            self.log(f"🎯 KOŃCOWY WYNIK: {len(detections)} wykryć")
-
-            for i, det in enumerate(detections):
-                self.log(f"   #{i+1}: {det['name']} (conf: {det['confidence']:.3f}) at ({det['center_x']}, {det['center_y']})")
-
+                
             return detections
 
         except Exception as e:

@@ -22,8 +22,8 @@ class HPMPRecoverySystem:
         self.controller = combat_controller
 
         # === KONFIGURACJA ===
-        self.mp_threshold = 40.0  # Użyj MP potion gdy < 40%
-        self.hp_threshold = 90.0  # Użyj HP potion gdy < 90%
+        self.mp_threshold = 10.0  # Użyj MP potion gdy < 40%
+        self.hp_threshold = 30.0  # Użyj HP potion gdy < 30%
         self.target_mp = 90.0  # Czekaj aż MP ≥ 90%
         self.target_hp = 90.0  # Czekaj aż HP ≥ 90%
 
@@ -35,8 +35,8 @@ class HPMPRecoverySystem:
 
         # Timing
         self.potion_press_duration = random.uniform(0.1, 0.2)  # Jak długo trzymać klawisz
-        self.wait_after_key7 = random.uniform(1, 1.2)  # Czekaj 1s po klawiszu 7
-        self.wait_after_f1 = random.uniform(0.1, 0.2)  # Czekaj 0.5s po F1 przed HP potion
+        self.wait_after_key7 = random.uniform(4, 5)  # Czekaj 1s po klawiszu 7
+        self.wait_after_f1 = random.uniform(0.07, 0.1)  # Random delay after F1 before HP potion (0.07-0.1s)
         self.regen_check_interval = 0.5  # Sprawdzaj regenerację co 0.5s
         self.hp_retry_timeout = 3.0  # Retry HP po 3s jeśli nie działa
 

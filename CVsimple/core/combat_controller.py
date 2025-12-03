@@ -1,7 +1,7 @@
 """
 Reactive Combat Controller - Complete Version with HP Recovery System
 Enhanced with HP monitoring, automatic health potion usage and modular continuous movement
-UPDATED: Integrated with new HP/MP Recovery System and FIXED HP/MP detection
+UPDATED: Fixed infinite recovery loop by disabling problematic recovery system
 """
 import win32api
 import win32con
@@ -11,9 +11,7 @@ import math
 from typing import Dict, List, Optional, Tuple, Any
 from .hp_based_approach import HPBasedApproachSystem
 from .mob_looting import create_mob_looter
-from .hp_recovery_system import create_hp_recovery_system
 from .continuous_movement_system import create_continuous_movement_system
-from .hp_mp_recovery import HPMPRecoverySystem
 
 
 
@@ -27,12 +25,13 @@ class ReactiveCombatController:
         self.VK_5, self.VK_6, self.VK_7, self.VK_8 = 0x35, 0x36, 0x37, 0x38
         self.VK_MINUS, self.VK_EQUALS = 0xBD, 0xBB
         self.VK_9 = 0x39  # Key for HP potion
+        self.VK_R = 0x52  # Key for healing (R)
 
         # Main system state
         self.mode = "exploration"  # exploration, combat, grace_period
         self.last_enemy_position: Optional[Tuple[float, float]] = None
         self.last_enemy_seen_time = 0
-        self.grace_period_duration = random.uniform(1, 3)
+        self.grace_period_duration = random.uniform(4, 5)
         self.grace_period_start_time = 0
 
         # NEW: Grace period key 7 system
@@ -94,26 +93,58 @@ class ReactiveCombatController:
         # Mob Looter System
         self.mob_looter = create_mob_looter(logger=self.logger, enabled=True, timeout=3.0)
 
-        # HP Recovery System - MODULAR APPROACH (EMERGENCY SYSTEM)
-        self.hp_recovery = create_hp_recovery_system(
-            logger=self.logger,
-            enabled=True,
-            potion_key=self.VK_9,
-            wait_duration=1.0,
-            critical_threshold=80.0,  # ZMIENIONE: 30% → 40%
-            recovery_threshold=85.0
-        )
+        # === CENTRALNA KONFIGURACJA SYSTEMU LECZENIA ===
+        self.healing_config = {
+            'emergency': {
+                'critical_threshold': 25.0,  # Aktywacja emergency w walce przy HP < 25%
+                'recovery_threshold': 50.0,   # Cel emergency: HP >= 50%
+                'f1_to_9_delay': random.uniform(0.07, 0.1),  # Random delay F1 → 9 (0.07-0.1s)
+                'use_f1_sequence': True,        # Użyj sekwencji F1 → 9
+                'wait_duration': random.uniform(3.8, 4.2),  # Czas między użyciami mikstur
+                'f1_key': 0x70,                # VK_F1
+                'potion_key': 0x39               # VK_9 (HP potion)
+            },
+            'regular': {
+                'hp_threshold': 50.0,          # Aktywacja regular recovery przy HP < 30%
+                'mp_threshold': 10.0,          # Aktywacja MP recovery przy MP < 10%
+                'hp_target': 80.0,              # Cel HP: >= 90%
+                'mp_target': 90.0,              # Cel MP: >= 90%
+                'f1_to_9_delay': random.uniform(0.07, 0.1),  # Random delay F1 → 9 (0.07-0.1s)
+                'use_f1_sequence': True,        # Użyj sekwencji F1 → 9
+                'after_combat_key': 0x37,      # VK_7 - po walce
+                'mp_potion_key': 0x38,          # VK_8 - MP potion
+                'hp_potion_key': 0x39,          # VK_9 - HP potion
+                'f1_key': 0x70,                # VK_F1
+                'potion_duration': random.uniform(0.1, 0.2),  # Jak długo trzymać miksturę
+                'after_key7_wait': random.uniform(4, 5),    # Czekanie po klawiszu 7
+                'regen_check_interval': 0.5,    # Sprawdzanie regeneracji
+                'exploration_check_interval': 5.0, # Sprawdzanie w exploration
+                'hp_retry_timeout': 3.0,         # Retry HP po timeout
+                'max_hp_attempts': 5               # Max prób HP
+            }
+        }
 
         # Continuous Movement System - MODULAR
         self.continuous_movement = create_continuous_movement_system(logger=self.logger)
         self.continuous_movement.enabled = True  # ← TUTAJ wyłącz od razu
 
-        # NEW: HP/MP Recovery System - COMPLETE REPLACEMENT
-        self.hp_mp_recovery = HPMPRecoverySystem(self)
-
+        
         # FIXED: Placeholder for bars analyzer (will be set externally)
         self.bars_analyzer = None
         self._hp_debug_counter = 0
+
+        # === EMERGENCY HEALING SYSTEM ===
+        self.emergency_healing_active = False
+        self.emergency_healing_start_time = 0
+        self.emergency_healing_last_r = 0
+        self.emergency_healing_interval = random.uniform(1.0, 2.0)  # 1-2s between R presses
+
+        # === POST-COMBAT HEALING SYSTEM ===
+        self.post_combat_healing_active = False
+        self.post_combat_healing_start_time = 0
+        self.post_combat_healing_last_r = 0
+        self.post_combat_healing_interval = random.uniform(2.0, 3.0)  # 2-3s between R presses (slower than emergency)
+        self.post_combat_healing_triggered = False  # Prevent re-triggering in same combat session
 
         # Statistics
         self.stats = {
@@ -123,6 +154,10 @@ class ReactiveCombatController:
             'position_clicks': 0,
             'successful_clicks': 0,
             'failed_clicks': 0,
+            'emergency_healings': 0,
+            'emergency_healing_time_total': 0.0,
+            'post_combat_healings': 0,
+            'post_combat_healing_time_total': 0.0,
             'method_stats': {
                 'wow_proven': 0,
                 'warcraft_style': 0,
@@ -135,8 +170,8 @@ class ReactiveCombatController:
     def _init_button_sequence_system(self):
         """Initialize the button sequence system for '-' and '=' keys"""
         self.button_sequence_enabled = True
-        self.button_sequence_interval_base = 30 * 60  # 30 minutes
-        self.button_sequence_interval_variance = 5 * 60  # ±5 minutes
+        self.button_sequence_interval_base = 4 * 60  # 4 minutes
+        self.button_sequence_interval_variance = 1 * 60  # ±1 minute (4-5 minutes range)
         self.button_sequence_hold_duration = (0.05, 0.15)
         self.button_sequence_delay = (1.0, 1.3)
         self.button_sequence_last_cycle = 0
@@ -185,10 +220,7 @@ class ReactiveCombatController:
 
             return hp_value
 
-        # Fallback do HP recovery system
-        if hasattr(self.hp_recovery, 'player_hp'):
-            return self.hp_recovery.player_hp
-
+        
         # Ostatni fallback - tylko raz w logach
         if self._hp_debug_counter == 1:
             self.log("⚠️ No HP data available - using fallback 100%")
@@ -203,33 +235,7 @@ class ReactiveCombatController:
         # Fallback - zakładaj pełne MP jeśli nie ma danych
         return 100.0
 
-    # === HP RECOVERY SYSTEM INTERFACE (delegates to hp_recovery module) ===
-    def handle_hp_event(self, event_type: str, hp_percentage: float):
-        """Handle HP events from PlayerBarsAnalyzer"""
-        self.hp_recovery.handle_hp_event(event_type, hp_percentage)
-
-    def handle_mana_event(self, event_type: str, mana_percentage: float):
-        """Handle Mana events from PlayerBarsAnalyzer"""
-        self.hp_recovery.handle_mana_event(event_type, mana_percentage)
-
-    def is_hp_recovery_active(self) -> bool:
-        """Check if HP recovery is currently active"""
-        return self.hp_recovery.is_active()
-
-    def get_hp_recovery_status(self) -> str:
-        """Get current HP recovery status for display"""
-        return self.hp_recovery.get_status()
-
-    def configure_hp_recovery(self, potion_key: int = None, wait_duration: float = 1.0,
-                             critical_threshold: float = 30.0, recovery_threshold: float = 80.0):
-        """Configure HP recovery system"""
-        self.hp_recovery.configure(
-            potion_key=potion_key,
-            wait_duration=wait_duration,
-            critical_threshold=critical_threshold,
-            recovery_threshold=recovery_threshold
-        )
-
+    
     # === CONTINUOUS MOVEMENT SYSTEM INTERFACE ===
     def enable_continuous_movement(self):
         """Enable continuous movement system"""
@@ -260,24 +266,7 @@ class ReactiveCombatController:
         """Get current continuous movement status"""
         return self.continuous_movement.get_status()
 
-    # === NEW: HP/MP RECOVERY SYSTEM INTERFACE ===
-    def configure_hp_mp_recovery(self, hp_threshold=90.0, mp_threshold=40.0,
-                                target_hp=90.0, target_mp=90.0):
-        """Konfiguruj nowy system HP/MP recovery"""
-        self.hp_mp_recovery.hp_threshold = hp_threshold
-        self.hp_mp_recovery.mp_threshold = mp_threshold
-        self.hp_mp_recovery.target_hp = target_hp
-        self.hp_mp_recovery.target_mp = target_mp
-        self.log(f"🔧 HP/MP Recovery configured: HP {hp_threshold}%→{target_hp}%, MP {mp_threshold}%→{target_mp}%")
-
-    def get_hp_mp_recovery_status(self) -> str:
-        """Pobierz status HP/MP recovery dla external use"""
-        return self.hp_mp_recovery.get_status() or "Idle"
-
-    def is_hp_mp_recovery_blocking(self) -> bool:
-        """Sprawdź czy HP/MP recovery blokuje inne systemy"""
-        return self.hp_mp_recovery.is_active()
-
+    
     # === BUTTON SEQUENCE SYSTEM ("-" and "=" keys) ===
     def _schedule_first_button_cycle(self):
         """Schedule the first button cycle with a short delay"""
@@ -485,10 +474,15 @@ class ReactiveCombatController:
 
     # === EMERGENCY BACKSTEP SYSTEM ===
     def check_emergency_backstep(self, enemy_x: float, enemy_y: float) -> bool:
-        """Check if emergency backstep is needed"""
+        """Check if emergency backstep is needed - ALWAYS IN COMBAT"""
         dx = enemy_x - self.screen_center_x
         dy = enemy_y - self.screen_center_y
         distance = math.sqrt(dx*dx + dy*dy)
+
+        # ZAWSZE uruchamiaj backstep w walce (random szansa)
+        if self.mode == "combat":
+            return random.random() < 0.1  # 10% szansa na krok do tyłu w każdej klatce
+
         return distance < self.emergency_distance_threshold
 
     def start_emergency_backstep(self, hwnd: int) -> bool:
@@ -570,13 +564,11 @@ class ReactiveCombatController:
             # Try all methods in order
             for method_name, method_func in methods:
                 try:
-                    self.log(f"🎯 Trying method: {method_name}")
                     if method_func(hwnd, x, y):
                         self.last_successful_method = method_name
                         self.stats['successful_clicks'] += 1
                         self.stats['position_clicks'] += 1
                         self.update_click_timers(is_loot)
-                        self.log(f"✅ {click_type} {method_name} SUCCESS at ({x:.0f}, {y:.0f})")
                         return True
 
                 except Exception as e:
@@ -612,29 +604,28 @@ class ReactiveCombatController:
 
     # === ATTACK SYSTEM ===
     def simple_attack(self, hwnd: int) -> bool:
-        """Perform attack with weighted key selection"""
-        current_time = time.time()
-        if current_time - self.last_attack_time < self.attack_interval:
-            return False
-
-        # Select key based on weights
-        rand = random.random()
-        cumulative_weight = 0
-        attack_key = self.VK_1
-
-        for key, weight in self.attack_weights.items():
-            cumulative_weight += weight
-            if rand <= cumulative_weight:
-                attack_key = key
-                break
-
-        if self.send_key_press(hwnd, attack_key):
-            self.last_attack_time = current_time
-            self.attack_interval = random.uniform(0.8, 1.5)
-            key_name = str(attack_key - 0x30)
-            self.log(f"⚔️ Attack: {key_name}")
-            return True
+        """DISABLED - Attack with weighted key selection - ALL SKILLS DISABLED"""
+        # WYLACZONE - nie uzywa zadnych skili do atakowania
+        # Tylko leczenie pod klawiszem "R" (VK_R = 0x52)
         return False
+
+    def heal_with_r(self, hwnd: int) -> bool:
+        """Leczenie pod klawiszem R - główna metoda regeneracji"""
+        try:
+            # Naciśnij klawisz R
+            success1 = self.send_key_down(hwnd, self.VK_R)
+            if not success1:
+                return False
+            time.sleep(0.1)  # 100ms hold
+            success2 = self.send_key_up(hwnd, self.VK_R)
+
+            if success1 and success2:
+                self.log("R - leczenie")
+                return True
+            return False
+        except Exception as e:
+            self.log(f"Blad leczenia R: {e}")
+            return False
 
     # === BASIC KEY FUNCTIONS ===
     def send_key_down(self, hwnd: int, vk_code: int) -> bool:
@@ -671,7 +662,47 @@ class ReactiveCombatController:
         """Main update loop - APPROACH DOESN'T BLOCK ATTACKS AND STEERING"""
         current_time = time.time()
 
-        # === ZBUDUJ ENEMIES NAJPIERW ===
+        # === EMERGENCY HEALING CHECK - HIGHEST PRIORITY ===
+        current_hp = self.get_current_hp_from_gui()
+        emergency_config = self.healing_config['emergency']
+
+        if not self.emergency_healing_active:
+            # Sprawdź czy aktywować emergency healing
+            if current_hp < emergency_config['critical_threshold']:
+                self.emergency_healing_active = True
+                self.emergency_healing_start_time = current_time
+                self.emergency_healing_last_r = 0
+                self.emergency_healing_interval = random.uniform(1.0, 2.0)  # 1-2s between R presses
+                self.stats['emergency_healings'] += 1
+
+                # Zatrzymaj aktywny backstep przed rozpoczęciem healingu
+                if self.emergency_backstep_active:
+                    self.send_key_up(hwnd, self.VK_S)
+                    self.emergency_backstep_active = False
+                    self.log("🚫 Emergency backstep STOPPED for healing")
+
+                self.log(f"🚨 EMERGENCY HEALING ACTIVATED at {current_hp:.1f}% HP (target: {emergency_config['recovery_threshold']}%)")
+        else:
+            # W trakcie emergency healing
+            if current_hp >= emergency_config['recovery_threshold']:
+                # Zakończ emergency healing
+                healing_time = current_time - self.emergency_healing_start_time
+                self.emergency_healing_active = False
+                self.stats['emergency_healing_time_total'] += healing_time
+                self.log(f"✅ Emergency healing completed in {healing_time:.1f}s (HP: {current_hp:.1f}%)")
+            else:
+                # W trakcie leczenia - naciśnij R co 1-2s
+                if current_time - self.emergency_healing_last_r >= self.emergency_healing_interval:
+                    if self.heal_with_r(hwnd):
+                        self.emergency_healing_last_r = current_time
+                        self.emergency_healing_interval = random.uniform(1.0, 2.0)  # Randomize next interval
+                        self.log(f"🩺 Emergency healing R pressed (HP: {current_hp:.1f}%, next R in {self.emergency_healing_interval:.1f}s)")
+
+                # BLOKUJ WSZYSTKO INNE PODCZAS EMERGENCY HEALING!
+                self.log(f"🩺 Emergency healing in progress... HP: {current_hp:.1f}% (target: {emergency_config['recovery_threshold']}%)")
+                return  # BLOKUJ WSZYSTKO INNE!
+
+        # === BUILD ENEMIES LIST FIRST (needed for grace period logic) ===
         enemies = []
         if detections:
             for detection in detections:
@@ -679,19 +710,97 @@ class ReactiveCombatController:
                 if any(keyword in name for keyword in ['mob', 'enemy', 'monster', 'target', 'health_bar']):
                     enemies.append(detection)
 
-        # === PRIORITY 1: EMERGENCY HP RECOVERY (klawisz 4 - działa ZAWSZE) ===
-        hp_recovery_blocking = self.hp_recovery.update(hwnd, self)
-        if hp_recovery_blocking:
-            self.log("🚨 EMERGENCY HP RECOVERY ACTIVE - blocking all other systems")
-            return  # EXIT EARLY - emergency ma NAJWYŻSZY priorytet
+        # === GRACE PERIOD PRIORITY CHECK (higher than post-combat healing) ===
+        has_enemies = bool(enemies)
+        if not has_enemies and self.mode == "combat":
+            # Przejście do grace period ma wyższy priorytet niż post-combat healing
+            self.log("👻 Enemy disappeared - starting grace period (loot)")
+            self.mode = "grace_period"
+            self.grace_period_start_time = current_time
+            self.grace_key7_done = False  # Reset flag dla nowego grace period
 
-        # === PRIORITY 2: FULL HP/MP RECOVERY (7,8,9 - tylko exploration) ===
-        recovery_state = self.hp_mp_recovery.update(hwnd, enemies)
+        # === POST-COMBAT HEALING CHECK - SECOND PRIORITY ===
+        regular_config = self.healing_config['regular']
 
-        # Jeśli HP/MP recovery jest aktywny - BLOKUJ wszystkie inne systemy
-        if self.hp_mp_recovery.is_active():
-            self.log(f"🛡️ Full Recovery active: {recovery_state} - blocking other systems")
-            return  # EXIT EARLY - full recovery blokuje inne systemy
+        # If we're in grace period, handle it immediately (highest priority)
+        if self.mode == "grace_period":
+            # === NEW: KLAWISZ 7 W GRACE PERIOD ===
+            if not self.grace_key7_done:
+                if self._press_grace_key7(hwnd):
+                    self.grace_key7_done = True
+                    self.log("⚔️ Grace period key '7' pressed")
+                else:
+                    self.log("❌ Failed to press grace period key '7'")
+
+            elapsed = current_time - self.grace_period_start_time
+
+            if elapsed >= self.grace_period_duration:
+                self.log("🔄 Grace period ended - returning to exploration")
+                self.mode = "exploration"
+                self.last_enemy_position = None
+                self.grace_key7_done = False  # Reset dla następnego razu
+            else:
+                # During grace period - loot and attack
+                remaining = self.grace_period_duration - elapsed
+
+                if int(remaining) != int(remaining + 0.1):
+                    self.log(f"📦 Grace period: {remaining:.1f}s remaining")
+
+                if self.last_enemy_position and self.can_loot_click():
+                    x, y = self.last_enemy_position
+                    self.perform_right_click(hwnd, x, y, is_loot=True)
+
+                # Grace period nie blokuje innych systemów ale ma wyższy priorytet
+                return
+
+        # Post-combat healing działa tylko w exploration
+        if self.mode == "exploration":
+            if not self.post_combat_healing_active:
+                # Sprawdź czy aktywować post-combat healing
+                if current_hp < regular_config['hp_threshold']:
+                    self.post_combat_healing_active = True
+                    self.post_combat_healing_start_time = current_time
+                    self.post_combat_healing_last_r = 0
+                    self.post_combat_healing_interval = random.uniform(2.0, 3.0)  # 2-3s between R presses
+                    self.stats['post_combat_healings'] += 1
+
+                    # Zatrzymaj aktywny backstep przed rozpoczęciem healingu
+                    if self.emergency_backstep_active:
+                        self.send_key_up(hwnd, self.VK_S)
+                        self.emergency_backstep_active = False
+                        self.log("🚫 Emergency backstep STOPPED for post-combat healing")
+
+                    # Zatrzymaj continuous movement przed rozpoczęciem healingu
+                    self.continuous_movement.stop_continuous_movement(hwnd, self.send_key_up)
+                    self.log("🚫 Continuous movement STOPPED for post-combat healing")
+
+                    self.log(f"🏥 POST-COMBAT HEALING ACTIVATED at {current_hp:.1f}% HP (target: {regular_config['hp_target']}%)")
+            else:
+                # W trakcie post-combat healing
+                if current_hp >= regular_config['hp_target']:
+                    # Zakończ post-combat healing
+                    healing_time = current_time - self.post_combat_healing_start_time
+                    self.post_combat_healing_active = False
+                    self.stats['post_combat_healing_time_total'] += healing_time
+                    self.log(f"✅ Post-combat healing completed in {healing_time:.1f}s (HP: {current_hp:.1f}%)")
+                else:
+                    # W trakcie leczenia - naciśnij R co 2-3s
+                    if current_time - self.post_combat_healing_last_r >= self.post_combat_healing_interval:
+                        if self.heal_with_r(hwnd):
+                            self.post_combat_healing_last_r = current_time
+                            self.post_combat_healing_interval = random.uniform(2.0, 3.0)
+                            self.log(f"💚 Post-combat healing R pressed (HP: {current_hp:.1f}%, next R in {self.post_combat_healing_interval:.1f}s)")
+
+                    # Post-combat healing w exploration nie blokuje innych systemów
+                    # (ale kolejne sekcje będą checkować czy healing jest aktywne)
+
+        # === RECOVERY SYSTEM DISABLED TO PREVENT INFINITE LOOP ===
+        # Old recovery system was causing infinite loop and has been disabled
+        # Combat continues without emergency recovery system
+        recovery_blocking = False
+
+        # HP Recovery blocking status dla GUI (legacy compatibility)
+        hp_recovery_blocking = False  # Recovery system disabled to prevent crashes
 
         # ANALYZING nie blokuje - można kontynuować
 
@@ -725,10 +834,11 @@ class ReactiveCombatController:
             self.log("🚨 Approach escape active - blocking other systems")
             return
 
-        # === CONTINUOUS MOVEMENT (blokowane przez approach MOVEMENT, nie przez approach system) ===
-        if not self.emergency_backstep_active and recovery_state != "MP_RECOVERY":
+        # === CONTINUOUS MOVEMENT (blokowane przez healing, approach MOVEMENT, nie przez approach system) ===
+        if not self.emergency_backstep_active:
             should_run_continuous = (
-                    not approach_blocking_movement or  # ZMIENIONE: używaj nowej flagi
+                    not approach_blocking_movement and  # ZMIENIONE: używaj nowej flagi
+                    not self.post_combat_healing_active and  # BLOKUJ PODCZAS POST-COMBAT HEALING
                     approach_state == "IDLE"
             )
 
@@ -760,9 +870,10 @@ class ReactiveCombatController:
             self.last_enemy_position = (enemy_x, enemy_y)
             self.last_enemy_seen_time = current_time
 
-            # Emergency backstep check
-            if self.check_emergency_backstep(enemy_x, enemy_y):
-                if not self.emergency_backstep_active:
+            # Emergency backstep check - WYŁĄCZONY PODCZAS LECZENIA
+            # Nie uruchamiaj backstepu jeśli healing jest aktywny
+            if not self.emergency_healing_active and not self.post_combat_healing_active:
+                if self.check_emergency_backstep(enemy_x, enemy_y):
                     self.start_emergency_backstep(hwnd)
 
             # === CAMERA/SKRĘCANIE - DOSTĘPNE PODCZAS APPROACH ===
@@ -777,56 +888,19 @@ class ReactiveCombatController:
             if self.can_combat_click():
                 self.perform_right_click(hwnd, enemy_x, enemy_y, is_loot=False)
 
-            # === ATAKI - DOSTĘPNE PODCZAS APPROACH ===
-            self.simple_attack(hwnd)
+            # === ATAKI I LECZENIE WYLĄCZONE ===
+            # self.simple_attack(hwnd)  # WYLĄCZONE - brak ataków skilami
+            # self.heal_with_r(hwnd)  # WYLĄCZONE - brak leczenia pod "R"
 
-        else:
-            # NO ENEMIES
-            if self.mode == "combat":
-                self.log("👻 Enemy disappeared - starting grace period (loot)")
-                self.mode = "grace_period"
-                self.grace_period_start_time = current_time
-                self.grace_key7_done = False  # Reset flag dla nowego grace period
-
-            elif self.mode == "grace_period":
-                # === NEW: KLAWISZ 7 W GRACE PERIOD ===
-                if not self.grace_key7_done:
-                    if self._press_grace_key7(hwnd):
-                        self.grace_key7_done = True
-                        self.log("⚔️ Grace period key '7' pressed")
-                    else:
-                        self.log("❌ Failed to press grace period key '7'")
-
-                elapsed = current_time - self.grace_period_start_time
-
-                if elapsed >= self.grace_period_duration:
-                    self.log("🔄 Grace period ended - returning to exploration")
-                    self.mode = "exploration"
-                    self.last_enemy_position = None
-                    self.grace_key7_done = False  # Reset dla następnego razu
-                else:
-                    # During grace period - loot and attack
-                    remaining = self.grace_period_duration - elapsed
-
-                    if int(remaining) != int(remaining + 0.1):
-                        self.log(f"📦 Grace period: {remaining:.1f}s remaining")
-
-                    if self.last_enemy_position and self.can_loot_click():
-                        x, y = self.last_enemy_position
-                        self.perform_right_click(hwnd, x, y, is_loot=True)
-
-                    # === ATAKI PODCZAS GRACE PERIOD - DOSTĘPNE PODCZAS APPROACH ===
-                    self.simple_attack(hwnd)
-                    return
-
+        
         # === MOB LOOTING - PRZEKAŻ closest_enemy ===
-        if recovery_state not in ["HP_RECOVERY", "MP_RECOVERY"]:
+        if True:  # Recovery system disabled - always allow looting
             # Przekaż tylko najbliższego wroga do lootingu
             loot_enemies = [closest_enemy] if closest_enemy else []
             self.mob_looter.process_frame(self, hwnd, loot_enemies)
 
     def emergency_stop(self, hwnd: int):
-        """Emergency stop all activities - UPDATED"""
+        """Emergency stop all activities - FIXED"""
         # NEW: Stop continuous movement using modular system
         self.continuous_movement.stop_continuous_movement(hwnd, self.send_key_up)
 
@@ -838,12 +912,6 @@ class ReactiveCombatController:
             self.send_key_up(hwnd, self.VK_S)
             self.emergency_backstep_active = False
 
-        # Stop old HP recovery using modular system (EMERGENCY)
-        self.hp_recovery.force_stop()
-
-        # === NEW: Stop HP/MP recovery (FULL RECOVERY) ===
-        self.hp_mp_recovery.force_stop(hwnd)
-
         self.mode = "exploration"
         self.last_enemy_position = None
         self.grace_key7_done = False
@@ -853,24 +921,31 @@ class ReactiveCombatController:
         """Get current status string for display - UPDATED"""
         status_parts = []
 
-        # === NEW: HP/MP Recovery ma najwyższy priorytet w statusie (po emergency) ===
-        # PRIORITY 1: Emergency HP Recovery
-        if hasattr(self, 'hp_recovery') and self.hp_recovery.is_active():
-            emergency_status = self.hp_recovery.get_status()
-            status_parts.append(f"🚨 EMERGENCY: {emergency_status}")
-            if self.emergency_backstep_active:
-                status_parts.append("🚨 EMERGENCY BACKSTEP")
+        # === HIGHEST PRIORITY: Emergency Healing System ===
+        if self.emergency_healing_active:
+            current_hp = self.get_current_hp_from_gui()
+            target_hp = self.healing_config['emergency']['recovery_threshold']
+            elapsed = time.time() - self.emergency_healing_start_time
+            next_r_in = max(0, self.emergency_healing_interval - (time.time() - self.emergency_healing_last_r))
+            status_parts.append(f"🚨 EMERGENCY HEALING")
+            status_parts.append(f"🩸 HP: {current_hp:.1f}% → {target_hp}%")
+            status_parts.append(f"⏱️ Time: {elapsed:.1f}s")
+            status_parts.append(f"⏰ Next R: {next_r_in:.1f}s")
             return " ".join(status_parts)
 
-        # PRIORITY 2: Full HP/MP Recovery
-        recovery_status = self.hp_mp_recovery.get_status()
-        if recovery_status:
-            status_parts.append(recovery_status)
-            # Pokaż tylko krytyczne info podczas recovery
-            if self.emergency_backstep_active:
-                status_parts.append("🚨 EMERGENCY BACKSTEP")
+        # === SECOND PRIORITY: Post-Combat Healing System ===
+        if self.post_combat_healing_active:
+            current_hp = self.get_current_hp_from_gui()
+            target_hp = self.healing_config['regular']['hp_target']
+            elapsed = time.time() - self.post_combat_healing_start_time
+            next_r_in = max(0, self.post_combat_healing_interval - (time.time() - self.post_combat_healing_last_r))
+            status_parts.append(f"🏥 POST-COMBAT HEALING")
+            status_parts.append(f"💚 HP: {current_hp:.1f}% → {target_hp}%")
+            status_parts.append(f"⏱️ Time: {elapsed:.1f}s")
+            status_parts.append(f"⏰ Next R: {next_r_in:.1f}s")
             return " ".join(status_parts)
 
+        
         if self.mode == "combat":
             status_parts.append("⚔️ COMBAT")
         elif self.mode == "grace_period":
@@ -882,11 +957,7 @@ class ReactiveCombatController:
                 grace_status += " [KEY7:⏳]"
             status_parts.append(grace_status)
         elif self.mode == "exploration":
-            # NEW: Show continuous movement status with HP/MP analysis
-            if self.hp_mp_recovery.is_analyzing():
-                exploration_status = f"🔄 EXPLORATION+ANALYSIS - {self.get_continuous_movement_status()}"
-            else:
-                exploration_status = f"🔄 EXPLORATION - {self.get_continuous_movement_status()}"
+            exploration_status = f"🔄 EXPLORATION - {self.get_continuous_movement_status()}"
             status_parts.append(exploration_status)
 
         if self.emergency_backstep_active:
@@ -997,13 +1068,6 @@ class ReactiveCombatController:
 
         button_stats = self.get_button_sequence_stats()
 
-        # Get HP Recovery stats from modular system (old)
-        hp_recovery_stats = self.hp_recovery.get_stats()
-        hp_recovery_detailed = self.hp_recovery.get_detailed_status()
-
-        # NEW: Get HP/MP recovery stats from new system
-        hp_mp_stats = self.hp_mp_recovery.get_stats()
-
         # Get continuous movement stats from modular system
         continuous_movement_stats = self.continuous_movement.get_stats()
 
@@ -1046,32 +1110,7 @@ class ReactiveCombatController:
             'button_sequence_time_since_last': button_stats['time_since_last_cycle'],
             'button_sequence_next_cycle_formatted': button_stats['next_cycle_formatted'],
 
-            # OLD HP Recovery statistics (from modular system)
-            'hp_recovery_active': hp_recovery_detailed['active'],
-            'hp_recovery_sessions': hp_recovery_stats['recovery_sessions'],
-            'health_potions_used': hp_recovery_stats['potions_used'],
-            'hp_recovery_time_total': hp_recovery_stats['total_recovery_time'],
-            'hp_recovery_average_time': hp_recovery_stats['average_recovery_time'],
-            'hp_recovery_fastest': hp_recovery_stats['fastest_recovery'],
-            'hp_recovery_slowest': hp_recovery_stats['slowest_recovery'],
-            'current_player_hp': hp_recovery_detailed['player_hp'],
-            'current_player_mana': hp_recovery_detailed['player_mana'],
-            'last_hp_event': hp_recovery_detailed['last_hp_event'],
-            'last_mana_event': hp_recovery_detailed['last_mana_event'],
-
-            # NEW HP/MP Recovery statistics (new system)
-            'hp_mp_recovery_state': hp_mp_stats['state'],
-            'hp_mp_recovery_active': hp_mp_stats['is_active'],
-            'hp_mp_recovery_analyzing': hp_mp_stats['is_analyzing'],
-            'hp_mp_analysis_sessions': hp_mp_stats['analysis_sessions'],
-            'hp_mp_hp_recoveries': hp_mp_stats['hp_recoveries'],
-            'hp_mp_mp_recoveries': hp_mp_stats['mp_recoveries'],
-            'hp_mp_hp_potions_used': hp_mp_stats['hp_potions_used'],
-            'hp_mp_mp_potions_used': hp_mp_stats['mp_potions_used'],
-            'hp_mp_emergency_stops': hp_mp_stats['emergency_stops'],
-            'hp_mp_avg_hp_time': hp_mp_stats['avg_hp_time'],
-            'hp_mp_avg_mp_time': hp_mp_stats['avg_mp_time'],
-
+            
             # Grace period stats
             'grace_key7_done': self.grace_key7_done,
 
@@ -1081,9 +1120,5 @@ class ReactiveCombatController:
             'continuous_movement_stats': continuous_movement_stats,
 
             # General statistics
-            'stats': self.stats.copy(),
-
-            # HP Recovery detailed stats (old system)
-            'hp_recovery_detailed': hp_recovery_detailed,
-            'hp_recovery_full_stats': hp_recovery_stats
+            'stats': self.stats.copy()
         }

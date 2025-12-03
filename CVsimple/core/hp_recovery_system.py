@@ -22,8 +22,13 @@ class HPRecoverySystem:
         self.recovery_key = 0x39  # VK_9 - health potion key
         self.f1_key = 0x70  # VK_F1 - F1 key
         self.f_key = 0x46  # VK_F - Spirit Wolves key (for future use)
-        self.critical_hp_threshold = 80.0  # Below this = critical
-        self.recovery_complete_threshold = 85.0  # Above this = recovery complete
+        self.critical_hp_threshold = 20.0  # Below this = critical
+        self.recovery_complete_threshold = 50.0  # Above this = recovery complete
+
+        # NEW: F1 → 9 sequence timing
+        self.f1_to_9_delay = random.uniform(0.07, 0.1)  # Random delay between F1 and 9 (0.07-0.1s)
+        self.f1_duration = random.uniform(0.1, 0.2)   # How long to hold F1
+        self.use_f1_sequence = True  # Enable F1 → 9 sequence
 
         # Player status tracking
         self.player_hp = 100.0
@@ -53,7 +58,8 @@ class HPRecoverySystem:
             self.logger.info(message)
 
     def configure(self, potion_key: int = None, f1_key: int = None, f_key: int = None, wait_duration: float = 1.0,
-                  critical_threshold: float = 30.0, recovery_threshold: float = 80.0):
+                  critical_threshold: float = 30.0, recovery_threshold: float = 80.0,
+                  f1_to_9_delay: float = 0.4, use_f1_sequence: bool = True):
         """Configure HP recovery system parameters"""
         if potion_key is not None:
             self.recovery_key = potion_key
@@ -70,11 +76,15 @@ class HPRecoverySystem:
         self.wait_duration = wait_duration
         self.critical_hp_threshold = critical_threshold
         self.recovery_complete_threshold = recovery_threshold
+        self.f1_to_9_delay = f1_to_9_delay
+        self.use_f1_sequence = use_f1_sequence
 
         self.log(f"⏱️ HP Recovery configured:")
         self.log(f"   Wait duration: {wait_duration}s between potions")
         self.log(f"   Critical threshold: {critical_threshold}%")
         self.log(f"   Recovery threshold: {recovery_threshold}%")
+        self.log(f"   F1→9 sequence: {'ENABLED' if use_f1_sequence else 'DISABLED'}")
+        self.log(f"   F1→9 delay: {f1_to_9_delay}s")
         self.log(f"   F1 key: {self.f1_key} (VK code)")
         self.log(f"   F key: {self.f_key} (VK code)")
 
@@ -113,7 +123,7 @@ class HPRecoverySystem:
             self.log(f"✅ Mana recovered: {mana_percentage:.1f}%")
 
     def trigger_recovery(self, hp_percentage: float, reason: str = "Manual trigger"):
-        """Start HP recovery mode"""
+        """Start HP recovery mode with F1 → 9 sequence"""
         if self.active:
             self.log(f"🔄 HP Recovery already active, current HP: {hp_percentage:.1f}%")
             return False
@@ -128,19 +138,23 @@ class HPRecoverySystem:
 
         self.log(f"🚨 HP RECOVERY STARTED: {hp_percentage:.1f}% - {reason}")
 
-        # Press F1 and F when entering recovery mode
-        self._press_f1_key()
+        # NEW: Press F1 first if sequence is enabled
+        if self.use_f1_sequence:
+            self._press_f1_key()
+
+        # Always press F key (Spirit Wolves)
         self._press_f_key()
 
         return True
 
     def _press_f1_key(self):
-        """Press F1 key when entering recovery mode"""
-        # This will be called by the controller in the update method
-        # We set a flag to indicate F1 should be pressed
-        self._f1_needs_press = True
+        """Press F1 key immediately when entering recovery mode"""
+        # Press F1 immediately and start delay timer
+        self._f1_needs_press = False  # Don't need to press later
+        self._f1_pressed_time = time.time()
         self.stats['f1_presses'] += 1
-        self.log("🔧 F1 key queued for press")
+        self.log("🔑 F1 key pressed immediately - HP potion will follow after delay")
+        return True
 
     def _press_f_key(self):
         """Press F key when entering recovery mode"""
@@ -202,7 +216,23 @@ class HPRecoverySystem:
             self._stop_all_movement(hwnd, controller)
             self.log("🛑 All movements stopped for HP recovery")
 
-        # Press F1 if needed (at the start of recovery)
+        # NEW: Handle F1 → 9 sequence
+        if self.use_f1_sequence and hasattr(self, '_f1_pressed_time'):
+            # Check if F1 delay has passed, then use HP potion
+            if current_time - self._f1_pressed_time >= self.f1_to_9_delay:
+                if self._use_health_potion(hwnd, controller):
+                    self.last_potion_time = current_time
+                    self.stats['potions_used'] += 1
+                    delattr(self, '_f1_pressed_time')  # Remove the flag
+
+                    recovery_elapsed = current_time - self.start_time
+                    self.log(f"🔑 F1 → 9 sequence completed - "
+                             f"potion used (#{self.stats['potions_used']}) - "
+                             f"recovery time: {recovery_elapsed:.1f}s")
+                else:
+                    self.log("❌ FAILED to use health potion after F1 - trying again in 0.5s")
+
+        # Legacy F1/F key support (if sequence disabled)
         if hasattr(self, '_f1_needs_press') and self._f1_needs_press:
             if self._press_f1_via_controller(hwnd, controller):
                 self._f1_needs_press = False
@@ -210,7 +240,6 @@ class HPRecoverySystem:
             else:
                 self.log("❌ FAILED to press F1 key")
 
-        # Press F if needed (at the start of recovery)
         if hasattr(self, '_f_needs_press') and self._f_needs_press:
             if self._press_f_via_controller(hwnd, controller):
                 self._f_needs_press = False
@@ -224,8 +253,8 @@ class HPRecoverySystem:
             if self.manual_check_recovery(current_hp):
                 return False  # Recovery completed
 
-        # Check if it's time to use another health potion
-        if current_time - self.last_potion_time >= self.wait_duration:
+        # Check if it's time to use another health potion (legacy support)
+        if not self.use_f1_sequence and current_time - self.last_potion_time >= self.wait_duration:
             if self._use_health_potion(hwnd, controller):
                 self.last_potion_time = current_time
                 self.stats['potions_used'] += 1
