@@ -10,13 +10,14 @@ from PIL import Image, ImageTk
 import cv2
 import numpy as np
 
-from core.window_capture import WindowCapture
-from core.yolo_detector import OptimizedYOLODetector
-from core.combat_controller import ReactiveCombatController
+from core.window_capture import WindowCapture, ThreadSafeWindowCapture
+from core.yolo_detector import OptimizedYOLODetector, MultiThreadedYOLODetector
+from core.combat_controller import ReactiveCombatController, AsyncCombatController
 from core.hp_bar_analyzer import PlayerBarsAnalyzer  # NOWY IMPORT
 from utils.preset_manager import PresetManager  # NOWY IMPORT
 from gui.preset_dialog import PresetDialog  # NOWY IMPORT
 from app_utils.performance_monitor import PerformanceMonitor  # NOWY IMPORT
+from app_utils.thread_manager import ThreadManager, initialize_thread_manager  # NOWY IMPORT
 
 class MainWindow:
     def __init__(self, root, logger):
@@ -46,6 +47,19 @@ class MainWindow:
         # NOWY: Performance Monitor
         self.performance_monitor = PerformanceMonitor()
         self.performance_monitor.start_monitoring()
+
+        # NOWY: Multi-threading components
+        self.thread_manager = initialize_thread_manager(logger)
+        self.use_multi_threading = False  # Feature flag for gradual rollout
+
+        # Async components (initialized when multi-threading is enabled)
+        self.thread_safe_capture = None
+        self.multi_threaded_yolo = None
+        self.async_combat_controller = None
+
+        # Thread coordination
+        self.coordination_thread = None
+        self.coordination_active = False
 
         # Stan aplikacji
         self.selected_window = None
@@ -429,6 +443,10 @@ class MainWindow:
                   command=self.show_model_info).pack(side='left', padx=(0, 5))
         ttk.Button(yolo_btn_frame, text="🧪 Test YOLO",
                   command=self.test_yolo_detection).pack(side='left', padx=(0, 5))
+
+        self.threading_toggle_btn = ttk.Button(yolo_btn_frame, text="⚡ Multi-Threading: OFF",
+                                             command=self.toggle_multi_threading)
+        self.threading_toggle_btn.pack(side='left', padx=(0, 5))
 
         self.yolo_toggle_btn = ttk.Button(yolo_btn_frame, text="▶️ Włącz YOLOv8", command=self.toggle_yolo)
         self.yolo_toggle_btn.pack(side='left')
@@ -2854,5 +2872,230 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
         try:
             if hasattr(self, 'preview_canvas') and self.preview_canvas:
                 self.preview_canvas.delete("test")
-        except:
+        except Exception as e:
             pass
+
+    def toggle_multi_threading(self):
+        """Toggle between single-threaded and multi-threaded processing"""
+        if self.yolo_active:
+            self.log_message("⚠️ Zatrzymaj najpierw detekcję YOLO przed przełączeniem trybu", "ERROR")
+            return
+
+        # Toggle threading mode
+        self.use_multi_threading = not self.use_multi_threading
+
+        if self.use_multi_threading:
+            # Enable multi-threading
+            self.log_message("🚀 Włączanie trybu wielowątkowego...")
+            self.threading_toggle_btn.config(text="⚡ Multi-Threading: ON")
+
+            if self._enable_multi_threading():
+                self.log_message("✅ Tryb wielowątkowy włączony pomyślnie")
+                self.log_message("📈 Oczekiwany zysk: +8-12 FPS przez równoległe przetwarzanie")
+            else:
+                self.log_message("❌ Błąd włączania trybu wielowątkowego", "ERROR")
+                self.use_multi_threading = False
+                self.threading_toggle_btn.config(text="⚡ Multi-Threading: OFF")
+        else:
+            # Disable multi-threading
+            self.log_message("🔄 Wyłączanie trybu wielowątkowego...")
+            self.threading_toggle_btn.config(text="⚡ Multi-Threading: OFF")
+
+            if self._disable_multi_threading():
+                self.log_message("✅ Tryb wielowątkowy wyłączony - powrót do sekwencyjnego")
+            else:
+                self.log_message("❌ Błąd wyłączania trybu wielowątkowego", "ERROR")
+
+    def _enable_multi_threading(self) -> bool:
+        """Enable multi-threading components"""
+        try:
+            # Stop any existing single-threaded components
+            self._stop_detection_thread_safe()
+
+            # Create async components
+            if not self.selected_window:
+                self.log_message("❌ Wybierz okno przed włączeniem trybu wielowątkowego", "ERROR")
+                return False
+
+            # Initialize Thread-Safe Window Capture
+            self.thread_safe_capture = ThreadSafeWindowCapture(
+                logger=self.logger,
+                target_fps=60,  # High FPS capture
+                queue_size=5
+            )
+
+            # Initialize Multi-Threaded YOLO Detector
+            self.multi_threaded_yolo = MultiThreadedYOLODetector(
+                logger=self.logger,
+                inference_queue_size=3,
+                results_queue_size=10
+            )
+
+            # Initialize Async Combat Controller
+            self.async_combat_controller = AsyncCombatController(
+                logger=self.logger,
+                combat_queue_size=5,
+                action_queue_size=10
+            )
+
+            # Start capture thread
+            if not self.thread_safe_capture.start_capture(self.selected_window['hwnd']):
+                self.log_message("❌ Nie można uruchomić capture thread", "ERROR")
+                return False
+
+            # Start inference thread
+            if not self.multi_threaded_yolo.start_inference():
+                self.log_message("❌ Nie można uruchomić inference thread", "ERROR")
+                self.thread_safe_capture.stop_capture()
+                return False
+
+            # Start combat processing thread
+            if not self.async_combat_controller.start_processing():
+                self.log_message("⚠️ Nie można uruchomić combat processing thread", "WARNING")
+
+            # Create coordination queues in thread manager
+            self.thread_manager.create_queue("frame_to_inference", 5, "oldest")
+            self.thread_manager.create_queue("inference_to_combat", 10, "oldest")
+            self.thread_manager.create_queue("combat_to_gui", 5, "oldest")
+
+            # Start coordination thread
+            self.coordination_active = True
+            self.coordination_thread = threading.Thread(
+                target=self._multi_threading_coordination_worker,
+                name="CoordinationThread",
+                daemon=True
+            )
+            self.coordination_thread.start()
+
+            self.log_message("✅ Wszystkie komponenty wielowątkowe uruchomione")
+            return True
+
+        except Exception as e:
+            self.log_message(f"❌ Błąd włączania trybu wielowątkowego: {str(e)}", "ERROR")
+            import traceback
+            self.log_message(f"Stack trace: {traceback.format_exc()}", "ERROR")
+            return False
+
+    def _disable_multi_threading(self) -> bool:
+        """Disable multi-threading components"""
+        try:
+            # Stop coordination thread
+            self.coordination_active = False
+            if self.coordination_thread and self.coordination_thread.is_alive():
+                self.coordination_thread.join(timeout=2.0)
+
+            # Stop async components
+            if self.thread_safe_capture:
+                self.thread_safe_capture.stop_capture()
+
+            if self.multi_threaded_yolo:
+                self.multi_threaded_yolo.stop_inference()
+
+            if self.async_combat_controller:
+                self.async_combat_controller.stop_processing()
+
+            # Reset to single-threaded components
+            self.thread_safe_capture = None
+            self.multi_threaded_yolo = None
+            self.async_combat_controller = None
+
+            self.log_message("✅ Komponenty wielowątkowe zatrzymane")
+            return True
+
+        except Exception as e:
+            self.log_message(f"❌ Błąd wyłączania trybu wielowątkowego: {str(e)}", "ERROR")
+            return False
+
+    def _multi_threading_coordination_worker(self):
+        """Coordination worker for multi-threaded processing"""
+        try:
+            self.log_message("🔄 Koordynacja wielowątkowa rozpoczęta")
+
+            while self.coordination_active:
+                frame_start_time = time.perf_counter()
+
+                try:
+                    # Step 1: Get frame from capture thread
+                    frame_data = self.thread_safe_capture.get_latest_frame(block=True, timeout=0.1)
+                    if frame_data is None:
+                        continue
+
+                    # Record capture latency
+                    capture_latency = (time.perf_counter() - frame_data['timestamp']) * 1000
+                    self.performance_monitor.record_capture_latency(capture_latency)
+
+                    # Step 2: Queue frame for inference
+                    if not self.multi_threaded_yolo.queue_frame(
+                        frame_data['frame'],
+                        confidence=0.5,
+                        frame_id=frame_data['frame_id'],
+                        timestamp=frame_data['timestamp']
+                    ):
+                        # Step 3: Queue detections for combat (if combat mode)
+                        results = self.multi_threaded_yolo.get_latest_results(block=True, timeout=0.2)
+                        if results:
+                            inference_latency = results['inference_time_ms']
+                            self.performance_monitor.record_inference_latency(inference_latency)
+
+                            if self.combat_mode:
+                                if self.async_combat_controller.queue_detections(
+                                    results['detections'],
+                                    self.selected_window['hwnd'],
+                                    results['frame_id'],
+                                    results['timestamp']
+                                ):
+                                    # Step 4: Get combat actions (non-blocking)
+                                    actions = self.async_combat_controller.get_latest_actions()
+                                    if actions:
+                                        combat_latency = actions['processing_time_ms']
+                                        self.performance_monitor.record_combat_latency(combat_latency)
+
+                        # Update performance monitor queue sizes
+                        self.performance_monitor.update_queue_size("capture_queue", self.thread_safe_capture.get_queue_size())
+                        self.performance_monitor.update_queue_size("inference_queue", self.multi_threaded_yolo.get_queue_sizes()['inference_queue'])
+                        self.performance_monitor.update_queue_size("results_queue", self.multi_threaded_yolo.get_queue_sizes()['results_queue'])
+                        if self.async_combat_controller:
+                            self.performance_monitor.update_queue_size("combat_queue", self.async_combat_controller.get_queue_sizes()['combat_queue'])
+
+                    # Record total frame time
+                    total_frame_time = (time.perf_counter() - frame_start_time) * 1000
+                    self.performance_monitor.record_frame_time(total_frame_time)
+
+                except Exception as coord_error:
+                    self.log_message(f"⚠️ Błąd koordynacji: {str(coord_error)}", "WARNING")
+
+        except Exception as e:
+            self.log_message(f"❌ Błąd w wątku koordynacji: {str(e)}", "ERROR")
+        finally:
+            self.log_message("🛑 Wątek koordynacji zatrzymany")
+
+    def _stop_detection_thread_safe(self):
+        """Safely stop any existing detection thread"""
+        if hasattr(self, 'detection_thread') and self.detection_thread:
+            self.yolo_active = False
+            if self.detection_thread.is_alive():
+                self.detection_thread.join(timeout=2.0)
+
+    def get_threading_stats(self):
+        """Get comprehensive threading statistics"""
+        if not self.use_multi_threading:
+            return {"mode": "single_threaded", "active": False}
+
+        stats = {
+            "mode": "multi_threaded",
+            "active": True,
+            "coordination_active": self.coordination_active,
+            "thread_manager_metrics": self.thread_manager.get_system_metrics()
+        }
+
+        # Component-specific stats
+        if self.thread_safe_capture:
+            stats["capture_stats"] = self.thread_safe_capture.get_capture_stats()
+
+        if self.multi_threaded_yolo:
+            stats["yolo_stats"] = self.multi_threaded_yolo.get_inference_stats()
+
+        if self.async_combat_controller:
+            stats["combat_stats"] = self.async_combat_controller.get_combat_stats()
+
+        return stats

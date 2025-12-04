@@ -1122,3 +1122,342 @@ class ReactiveCombatController:
             # General statistics
             'stats': self.stats.copy()
         }
+
+
+class AsyncCombatController(ReactiveCombatController):
+    """
+    Asynchronous combat controller with dedicated processing thread
+    Designed for multi-threaded YOLO pipeline architecture
+    """
+
+    def __init__(self, logger=None, combat_queue_size=5, action_queue_size=10):
+        super().__init__(logger)
+
+        # Queue configuration
+        self.combat_queue_size = combat_queue_size
+        self.action_queue_size = action_queue_size
+
+        # Threading components
+        self.combat_thread = None
+        self.combat_queue = None
+        self.action_queue = None
+        self.is_processing = False
+
+        # Performance tracking
+        self.combat_times = []
+        self.combat_count = 0
+        self.detections_queued = 0
+        self.detections_dropped = 0
+        self.actions_performed = 0
+
+        # Initialize thread-safe components
+        self._init_threading()
+
+    def _init_threading(self):
+        """Initialize threading components"""
+        import threading
+        import queue
+
+        self.combat_queue = queue.Queue(maxsize=self.combat_queue_size)
+        self.action_queue = queue.Queue(maxsize=self.action_queue_size)
+
+        self.log(f"🔄 AsyncCombatController initialized: combat_queue={self.combat_queue_size}, action_queue={self.action_queue_size}")
+
+    def start_processing(self):
+        """Start dedicated combat processing thread"""
+        if self.combat_thread and self.combat_thread.is_alive():
+            self.log("⚠️ Combat processing thread already running")
+            return
+
+        self.is_processing = True
+        self.combat_count = 0
+        self.detections_queued = 0
+        self.detections_dropped = 0
+        self.actions_performed = 0
+
+        self.combat_thread = threading.Thread(
+            target=self._combat_worker,
+            name="CombatLogicThread",
+            daemon=True
+        )
+        self.combat_thread.start()
+        self.log("🚀 Combat processing thread started")
+        return True
+
+    def stop_processing(self):
+        """Stop combat processing thread gracefully"""
+        if not self.is_processing:
+            return
+
+        self.is_processing = False
+
+        if self.combat_thread and self.combat_thread.is_alive():
+            self.combat_thread.join(timeout=2.0)
+            if self.combat_thread.is_alive():
+                self.log("⚠️ Combat processing thread did not stop gracefully")
+            else:
+                self.log("✅ Combat processing thread stopped gracefully")
+
+        # Clear queues
+        self._clear_queues()
+
+        self.log(f"📊 Combat processing stopped - Queued: {self.detections_queued}, Dropped: {self.detections_dropped}, Actions: {self.actions_performed}")
+
+    def _clear_queues(self):
+        """Clear all queues"""
+        combat_cleared = 0
+        action_cleared = 0
+
+        while not self.combat_queue.empty():
+            try:
+                self.combat_queue.get_nowait()
+                combat_cleared += 1
+            except:
+                break
+
+        while not self.action_queue.empty():
+            try:
+                self.action_queue.get_nowait()
+                action_cleared += 1
+            except:
+                break
+
+        self.log(f"🗑️ Cleared queues: combat={combat_cleared}, actions={action_cleared}")
+
+    def _combat_worker(self):
+        """Dedicated combat logic processing thread"""
+        import time
+
+        self.log("🔄 Combat worker started")
+
+        while self.is_processing:
+            try:
+                # Get detection results from queue (blocking with timeout)
+                detection_data = self.combat_queue.get(timeout=0.1)
+
+                if detection_data is None:  # Poison pill
+                    continue
+
+                combat_start = time.perf_counter()
+
+                # Process combat logic
+                actions = self._process_combat_logic(
+                    detection_data.get('detections', []),
+                    detection_data.get('hwnd', 0),
+                    detection_data.get('frame_id', 0)
+                )
+
+                # Calculate processing time
+                combat_time = (time.perf_counter() - combat_start) * 1000
+
+                # Update performance stats
+                self._update_combat_stats(combat_time)
+
+                # Queue actions for main thread
+                action_data = {
+                    'actions': actions,
+                    'frame_id': detection_data.get('frame_id', 0),
+                    'timestamp': detection_data.get('timestamp', time.time()),
+                    'processing_time_ms': combat_time,
+                    'detections_count': len(detection_data.get('detections', [])),
+                    'hwnd': detection_data.get('hwnd', 0)
+                }
+
+                try:
+                    self.action_queue.put_nowait(action_data)
+                    self.actions_performed += 1
+                except:
+                    # Action queue full - drop oldest
+                    try:
+                        self.action_queue.get_nowait()
+                        self.action_queue.put_nowait(action_data)
+                    except:
+                        self.log("⚠️ Action queue overflow, dropping actions")
+
+            except Exception as worker_error:
+                self.log(f"❌ Combat worker error: {str(worker_error)}")
+                time.sleep(0.01)
+
+        self.log("🛑 Combat worker stopped")
+
+    def _process_combat_logic(self, detections, hwnd, frame_id):
+        """Process combat logic (delegate to parent class)"""
+        try:
+            # Update parent controller with detections
+            self.update(hwnd, detections)
+
+            # Get current actions/state from parent
+            current_actions = []
+
+            # Extract actionable items from current state
+            if self.mode == "combat":
+                current_actions = {
+                    'mode': self.mode,
+                    'target_position': self.last_enemy_position,
+                    'target_distance': self._calculate_distance_to_target() if self.last_enemy_position else 0,
+                    'movement_direction': self._get_movement_direction(),
+                    'grace_period': self._is_in_grace_period(),
+                    'actions_performed': self.combat_count
+                }
+            elif self.mode == "exploration":
+                current_actions = {
+                    'mode': self.mode,
+                    'movement_active': self.continuous_movement.is_active() if hasattr(self, 'continuous_movement') else False,
+                    'grace_period': self._is_in_grace_period()
+                }
+
+            return current_actions
+
+        except Exception as e:
+            self.log(f"❌ Combat logic processing error: {str(e)}")
+            return {'error': str(e), 'frame_id': frame_id}
+
+    def _calculate_distance_to_target(self):
+        """Calculate distance to current target"""
+        if not self.last_enemy_position:
+            return 0
+
+        try:
+            enemy_x, enemy_y = self.last_enemy_position
+            distance = math.sqrt((enemy_x - self.screen_center_x)**2 + (enemy_y - self.screen_center_y)**2)
+            return distance
+        except:
+            return 0
+
+    def _get_movement_direction(self):
+        """Get current movement direction"""
+        if not hasattr(self, 'continuous_movement'):
+            return "unknown"
+
+        try:
+            # Extract movement direction from continuous movement system
+            if hasattr(self.continuous_movement, 'current_direction'):
+                return self.continuous_movement.current_direction
+            return "unknown"
+        except:
+            return "unknown"
+
+    def _is_in_grace_period(self):
+        """Check if currently in grace period"""
+        return (time.time() - self.grace_period_start_time) < self.grace_period_duration
+
+    def _update_combat_stats(self, combat_time):
+        """Update combat processing statistics"""
+        self.combat_times.append(combat_time)
+
+        # Keep only recent samples
+        if len(self.combat_times) > 100:
+            self.combat_times = self.combat_times[-100:]
+
+        self.combat_count += 1
+
+    def queue_detections(self, detections, hwnd=0, frame_id=None, timestamp=None):
+        """Queue detection results for combat processing"""
+        if not self.is_processing:
+            self.log("⚠️ Combat processing not running, cannot queue detections")
+            return False
+
+        if frame_id is None:
+            frame_id = self.detections_queued
+
+        if timestamp is None:
+            timestamp = time.time()
+
+        detection_data = {
+            'detections': detections,
+            'hwnd': hwnd,
+            'frame_id': frame_id,
+            'timestamp': timestamp
+        }
+
+        try:
+            self.combat_queue.put_nowait(detection_data)
+            self.detections_queued += 1
+            return True
+        except:
+            self.detections_dropped += 1
+            return False
+
+    def get_latest_actions(self, block=False, timeout=None):
+        """Get latest combat actions"""
+        import queue
+
+        try:
+            if block:
+                action_data = self.action_queue.get(timeout=timeout or 0.1)
+            else:
+                action_data = self.action_queue.get_nowait()
+            return action_data
+        except queue.Empty:
+            return None
+
+    def get_queue_sizes(self):
+        """Get current queue sizes"""
+        return {
+            'combat_queue': self.combat_queue.qsize(),
+            'action_queue': self.action_queue.qsize(),
+            'combat_queue_capacity': self.combat_queue_size,
+            'action_queue_capacity': self.action_queue_size
+        }
+
+    def get_combat_stats(self):
+        """Get detailed combat processing statistics"""
+        base_stats = super().get_stats()
+
+        if self.combat_times:
+            avg_time = sum(self.combat_times) / len(self.combat_times)
+            max_time = max(self.combat_times)
+            min_time = min(self.combat_times)
+        else:
+            avg_time = max_time = min_time = 0
+
+        thread_stats = {
+            'is_processing': self.is_processing,
+            'combat_thread_alive': self.combat_thread.is_alive() if self.combat_thread else False,
+            'combat_count': self.combat_count,
+            'detections_queued': self.detections_queued,
+            'detections_dropped': self.detections_dropped,
+            'actions_performed': self.actions_performed,
+            'drop_rate_percent': (self.detections_dropped / max(1, self.detections_queued + self.detections_dropped)) * 100,
+            'avg_combat_time_ms': avg_time,
+            'max_combat_time_ms': max_time,
+            'min_combat_time_ms': min_time,
+            'queue_sizes': self.get_queue_sizes()
+        }
+
+        # Merge with base stats
+        base_stats.update(thread_stats)
+        return base_stats
+
+    def set_queue_sizes(self, combat_size=None, action_size=None):
+        """Dynamically adjust queue sizes (requires restart)"""
+        if combat_size and 1 <= combat_size <= 20:
+            self.combat_queue_size = combat_size
+            self.log(f"🔄 Combat queue size set to: {combat_size}")
+
+        if action_size and 1 <= action_size <= 50:
+            self.action_queue_size = action_size
+            self.log(f"🔄 Action queue size set to: {action_size}")
+
+    def get_processing_info(self):
+        """Get processing information"""
+        base_info = super().get_stats()
+
+        threading_info = {
+            'async_enabled': True,
+            'is_processing': self.is_processing,
+            'processing_thread_alive': self.combat_thread.is_alive() if self.combat_thread else False,
+            'queue_sizes': self.get_queue_sizes(),
+            'detections_processed': self.detections_queued,
+            'actions_generated': self.actions_performed
+        }
+
+        base_info.update(threading_info)
+        return base_info
+
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        try:
+            self.stop_processing()
+        except:
+            pass

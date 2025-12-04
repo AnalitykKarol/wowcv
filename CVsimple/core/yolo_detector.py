@@ -510,6 +510,362 @@ class OptimizedYOLODetector:
         }
 
 
+class MultiThreadedYOLODetector(OptimizedYOLODetector):
+    """
+    Multi-threaded YOLO detector with dedicated inference thread and queue management
+    Designed for async processing pipeline to achieve 30+ FPS performance
+    """
+
+    def __init__(self, logger=None, inference_queue_size=3, results_queue_size=10):
+        super().__init__(logger)
+
+        # Queue configuration
+        self.inference_queue_size = inference_queue_size
+        self.results_queue_size = results_queue_size
+
+        # Threading components
+        self.inference_thread = None
+        self.inference_queue = None
+        self.results_queue = None
+        self.model_lock = None
+        self.is_running = False
+
+        # Performance tracking
+        self.inference_times = []
+        self.inference_count = 0
+        self.frames_queued = 0
+        self.frames_dropped = 0
+        self.results_processed = 0
+
+        # Initialize thread-safe components
+        self._init_threading()
+
+    def _init_threading(self):
+        """Initialize threading components"""
+        import threading
+        import queue
+
+        self.model_lock = threading.Lock()
+        self.inference_queue = queue.Queue(maxsize=self.inference_queue_size)
+        self.results_queue = queue.Queue(maxsize=self.results_queue_size)
+
+        self.log(f"🔄 MultiThreadedYOLODetector initialized: inference_queue={self.inference_queue_size}, results_queue={self.results_queue_size}")
+
+    def start_inference(self):
+        """Start dedicated inference thread"""
+        if self.inference_thread and self.inference_thread.is_alive():
+            self.log("⚠️ Inference thread already running")
+            return
+
+        if not self.model_loaded:
+            self.log("❌ Model not loaded, cannot start inference")
+            return False
+
+        self.is_running = True
+        self.inference_count = 0
+        self.frames_queued = 0
+        self.frames_dropped = 0
+        self.results_processed = 0
+
+        self.inference_thread = threading.Thread(
+            target=self._inference_worker,
+            name="YOLOInferenceThread",
+            daemon=True
+        )
+        self.inference_thread.start()
+        self.log("🚀 YOLO inference thread started")
+        return True
+
+    def stop_inference(self):
+        """Stop inference thread gracefully"""
+        if not self.is_running:
+            return
+
+        self.is_running = False
+
+        if self.inference_thread and self.inference_thread.is_alive():
+            self.inference_thread.join(timeout=3.0)
+            if self.inference_thread.is_alive():
+                self.log("⚠️ Inference thread did not stop gracefully")
+            else:
+                self.log("✅ Inference thread stopped gracefully")
+
+        # Clear queues
+        self._clear_queues()
+
+        self.log(f"📊 Inference stopped - Queued: {self.frames_queued}, Dropped: {self.frames_dropped}, Processed: {self.results_processed}")
+
+    def _clear_queues(self):
+        """Clear all queues"""
+        inference_cleared = 0
+        results_cleared = 0
+
+        while not self.inference_queue.empty():
+            try:
+                self.inference_queue.get_nowait()
+                inference_cleared += 1
+            except:
+                break
+
+        while not self.results_queue.empty():
+            try:
+                self.results_queue.get_nowait()
+                results_cleared += 1
+            except:
+                break
+
+        self.log(f"🗑️ Cleared queues: inference={inference_cleared}, results={results_cleared}")
+
+    def _inference_worker(self):
+        """Dedicated inference thread"""
+        import time
+
+        self.log("🔄 Inference worker started")
+
+        while self.is_running:
+            try:
+                # Get frame from queue (blocking with timeout)
+                frame_data = self.inference_queue.get(timeout=0.1)
+
+                if frame_data is None:  # Poison pill
+                    continue
+
+                inference_start = time.perf_counter()
+
+                # Perform inference with model lock
+                with self.model_lock:
+                    if not self.model_loaded or self.model is None:
+                        self.log("❌ Model not available for inference")
+                        continue
+
+                    try:
+                        # Validate and prepare frame
+                        validated_frame = self.validate_and_prepare_image(
+                            frame_data['frame'],
+                            f"Inference-{frame_data.get('frame_id', 'unknown')}"
+                        )
+
+                        if validated_frame is None:
+                            self.log(f"⚠️ Frame validation failed for frame {frame_data.get('frame_id', 'unknown')}")
+                            continue
+
+                        # Perform YOLO inference
+                        results = self.model(
+                            validated_frame,
+                            conf=frame_data.get('confidence', 0.5),
+                            verbose=False,
+                            device='cuda' if torch.cuda.is_available() else 'cpu'
+                        )
+
+                        # Process results
+                        detections = self._process_yolo_results(
+                            results,
+                            validated_frame,
+                            frame_data.get('frame_id', 0)
+                        )
+
+                    except Exception as inference_error:
+                        self.log(f"❌ Inference error: {str(inference_error)}")
+                        detections = []
+
+                # Calculate inference time
+                inference_time = (time.perf_counter() - inference_start) * 1000
+
+                # Update performance stats
+                self._update_inference_stats(inference_time)
+
+                # Queue results
+                result_data = {
+                    'detections': detections,
+                    'frame_id': frame_data.get('frame_id', 0),
+                    'timestamp': frame_data.get('timestamp', time.time()),
+                    'inference_time_ms': inference_time,
+                    'confidence': frame_data.get('confidence', 0.5),
+                    'input_shape': validated_frame.shape if 'validated_frame' in locals() else None
+                }
+
+                try:
+                    self.results_queue.put_nowait(result_data)
+                    self.results_processed += 1
+                except:
+                    # Results queue full - drop oldest
+                    try:
+                        self.results_queue.get_nowait()
+                        self.results_queue.put_nowait(result_data)
+                    except:
+                        self.log("⚠️ Results queue overflow, dropping result")
+
+            except Exception as worker_error:
+                self.log(f"❌ Worker error: {str(worker_error)}")
+                time.sleep(0.01)
+
+        self.log("🛑 Inference worker stopped")
+
+    def _process_yolo_results(self, results, frame, frame_id):
+        """Process YOLO results into detection format"""
+        try:
+            detections = []
+
+            if results and hasattr(results, 'boxes') and results.boxes is not None:
+                boxes = results.boxes
+
+                for box in boxes:
+                    # Extract coordinates
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                    confidence = box.conf[0].cpu().numpy()
+                    class_id = int(box.cls[0].cpu().numpy())
+
+                    # Get class name
+                    class_name = self.class_names[class_id] if class_id < len(self.class_names) else f"class_{class_id}"
+
+                    # Calculate center point
+                    center_x = int((x1 + x2) / 2)
+                    center_y = int((y1 + y2) / 2)
+
+                    # Create detection object
+                    detection = {
+                        'name': class_name,
+                        'confidence': float(confidence),
+                        'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                        'center_x': center_x,
+                        'center_y': center_y,
+                        'width': int(x2 - x1),
+                        'height': int(y2 - y1),
+                        'class_id': class_id,
+                        'frame_id': frame_id
+                    }
+
+                    detections.append(detection)
+
+            return detections
+
+        except Exception as e:
+            self.log(f"❌ Error processing YOLO results: {str(e)}")
+            return []
+
+    def _update_inference_stats(self, inference_time):
+        """Update inference performance statistics"""
+        self.inference_times.append(inference_time)
+
+        # Keep only recent samples
+        if len(self.inference_times) > 100:
+            self.inference_times = self.inference_times[-100:]
+
+        self.inference_count += 1
+
+    def queue_frame(self, frame, confidence=0.5, frame_id=None, timestamp=None):
+        """Queue frame for inference"""
+        if not self.is_running:
+            self.log("⚠️ Inference not running, cannot queue frame")
+            return False
+
+        if frame_id is None:
+            frame_id = self.frames_queued
+
+        if timestamp is None:
+            timestamp = time.time()
+
+        frame_data = {
+            'frame': frame,
+            'confidence': confidence,
+            'frame_id': frame_id,
+            'timestamp': timestamp
+        }
+
+        try:
+            self.inference_queue.put_nowait(frame_data)
+            self.frames_queued += 1
+            return True
+        except:
+            self.frames_dropped += 1
+            return False
+
+    def get_latest_results(self, block=False, timeout=None):
+        """Get latest inference results"""
+        import queue
+
+        try:
+            if block:
+                result_data = self.results_queue.get(timeout=timeout or 0.1)
+            else:
+                result_data = self.results_queue.get_nowait()
+            return result_data
+        except queue.Empty:
+            return None
+
+    def get_queue_sizes(self):
+        """Get current queue sizes"""
+        return {
+            'inference_queue': self.inference_queue.qsize(),
+            'results_queue': self.results_queue.qsize(),
+            'inference_queue_capacity': self.inference_queue_size,
+            'results_queue_capacity': self.results_queue_size
+        }
+
+    def get_inference_stats(self):
+        """Get detailed inference statistics"""
+        base_stats = super().get_capture_stats()
+
+        if self.inference_times:
+            avg_time = sum(self.inference_times) / len(self.inference_times)
+            max_time = max(self.inference_times)
+            min_time = min(self.inference_times)
+            estimated_fps = 1000.0 / avg_time if avg_time > 0 else 0
+        else:
+            avg_time = max_time = min_time = estimated_fps = 0
+
+        thread_stats = {
+            'is_running': self.is_running,
+            'inference_count': self.inference_count,
+            'frames_queued': self.frames_queued,
+            'frames_dropped': self.frames_dropped,
+            'results_processed': self.results_processed,
+            'drop_rate_percent': (self.frames_dropped / max(1, self.frames_queued + self.frames_dropped)) * 100,
+            'avg_inference_time_ms': avg_time,
+            'max_inference_time_ms': max_time,
+            'min_inference_time_ms': min_time,
+            'estimated_fps': estimated_fps,
+            'queue_sizes': self.get_queue_sizes()
+        }
+
+        # Merge with base stats
+        base_stats.update(thread_stats)
+        return base_stats
+
+    def set_queue_sizes(self, inference_size=None, results_size=None):
+        """Dynamically adjust queue sizes (requires restart)"""
+        if inference_size and 1 <= inference_size <= 20:
+            self.inference_queue_size = inference_size
+            self.log(f"🔄 Inference queue size set to: {inference_size}")
+
+        if results_size and 1 <= results_size <= 50:
+            self.results_queue_size = results_size
+            self.log(f"🔄 Results queue size set to: {results_size}")
+
+    def get_model_info(self):
+        """Get model information with threading status"""
+        info = super().get_model_info()
+
+        threading_info = {
+            'threading_enabled': True,
+            'is_running': self.is_running,
+            'inference_thread_alive': self.inference_thread.is_alive() if self.inference_thread else False,
+            'queue_sizes': self.get_queue_sizes(),
+            'frames_queued': self.frames_queued,
+            'frames_processed': self.results_processed
+        }
+
+        info.update(threading_info)
+        return info
+
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        try:
+            self.stop_inference()
+        except:
+            pass
+
+
 # Aliasy dla kompatybilności
 YOLODetector = OptimizedYOLODetector
 HPBarDetector = OptimizedYOLODetector

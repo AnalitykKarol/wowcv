@@ -406,3 +406,242 @@ class WindowCapture:
         except Exception as e:
             self.log(f"❌ Błąd pobierania informacji o ekranie: {str(e)}")
             return {'resolution': (1920, 1080), 'monitor_info': None, 'error': str(e)}
+
+
+class ThreadSafeWindowCapture(WindowCapture):
+    """
+    Thread-safe window capture with dedicated capture thread running at high FPS
+    Designed for multi-threaded YOLO pipeline architecture
+    """
+
+    def __init__(self, logger=None, target_fps=60, queue_size=5):
+        super().__init__(logger)
+        self.target_fps = target_fps
+        self.frame_interval = 1.0 / target_fps
+        self.queue_size = queue_size
+
+        # Threading components
+        self.capture_thread = None
+        self.frame_queue = None
+        self.stats_lock = None
+        self.is_capturing = False
+        self.hwnd = None
+
+        # Performance tracking
+        self.capture_times = []
+        self.frame_id_counter = 0
+        self.frames_dropped = 0
+        self.last_capture_time = 0
+
+        # Initialize thread-safe components
+        self._init_threading()
+
+    def _init_threading(self):
+        """Initialize threading components"""
+        import threading
+        import queue
+
+        self.stats_lock = threading.Lock()
+        self.frame_queue = queue.Queue(maxsize=self.queue_size)
+
+        self.log(f"🔄 ThreadSafeWindowCapture initialized: {self.target_fps} FPS, queue size: {self.queue_size}")
+
+    def start_capture(self, hwnd):
+        """Start dedicated capture thread"""
+        if self.capture_thread and self.capture_thread.is_alive():
+            self.log("⚠️ Capture thread already running")
+            return
+
+        if not self.is_window_valid(hwnd):
+            self.log(f"❌ Invalid window handle: {hwnd}")
+            return False
+
+        self.hwnd = hwnd
+        self.is_capturing = True
+        self.frames_dropped = 0
+        self.frame_id_counter = 0
+
+        self.capture_thread = threading.Thread(
+            target=self._capture_worker,
+            name="WindowCaptureThread",
+            daemon=True
+        )
+        self.capture_thread.start()
+        self.log(f"🚀 Capture thread started for window {hwnd}")
+        return True
+
+    def stop_capture(self):
+        """Stop capture thread gracefully"""
+        if not self.is_capturing:
+            return
+
+        self.is_capturing = False
+
+        if self.capture_thread and self.capture_thread.is_alive():
+            self.capture_thread.join(timeout=2.0)
+            if self.capture_thread.is_alive():
+                self.log("⚠️ Capture thread did not stop gracefully")
+            else:
+                self.log("✅ Capture thread stopped gracefully")
+
+        # Clear queue
+        while not self.frame_queue.empty():
+            try:
+                self.frame_queue.get_nowait()
+            except:
+                break
+
+        self.log(f"📊 Capture stopped - Total frames dropped: {self.frames_dropped}")
+
+    def _capture_worker(self):
+        """Dedicated capture thread running at target_fps"""
+        import time
+        import numpy as np
+
+        self.log(f"🔄 Capture worker started: {self.target_fps} FPS target")
+
+        while self.is_capturing:
+            frame_start_time = time.perf_counter()
+
+            try:
+                # Validate window before capture
+                if not self.is_window_valid(self.hwnd):
+                    self.log("❌ Window became invalid during capture")
+                    time.sleep(0.1)
+                    continue
+
+                # Capture frame
+                frame = super().capture_window_screenshot(self.hwnd)
+
+                if frame is not None and isinstance(frame, np.ndarray) and frame.size > 0:
+                    # Create frame metadata
+                    timestamp = time.time()
+                    frame_id = self.frame_id_counter
+
+                    frame_data = {
+                        'frame': frame,
+                        'timestamp': timestamp,
+                        'frame_id': frame_id,
+                        'hwnd': self.hwnd,
+                        'capture_time': timestamp
+                    }
+
+                    # Add to queue (drop if full)
+                    try:
+                        self.frame_queue.put_nowait(frame_data)
+                        self.frame_id_counter += 1
+                    except:
+                        self.frames_dropped += 1
+
+                        # Optional: Drop oldest frame to make space
+                        try:
+                            self.frame_queue.get_nowait()
+                            self.frame_queue.put_nowait(frame_data)
+                        except:
+                            pass
+
+                    # Track capture timing
+                    capture_duration = (time.perf_counter() - frame_start_time) * 1000
+                    self._update_capture_stats(capture_duration)
+
+                else:
+                    # Failed capture - sleep briefly
+                    time.sleep(0.001)
+
+            except Exception as e:
+                self.log(f"❌ Capture error: {str(e)}")
+                time.sleep(0.01)
+
+            # Maintain target FPS
+            frame_duration = time.perf_counter() - frame_start_time
+            sleep_time = max(0, self.frame_interval - frame_duration)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        self.log("🛑 Capture worker stopped")
+
+    def _update_capture_stats(self, capture_duration):
+        """Update capture performance statistics"""
+        with self.stats_lock:
+            self.capture_times.append(capture_duration)
+            # Keep only recent samples (last 100)
+            if len(self.capture_times) > 100:
+                self.capture_times = self.capture_times[-100:]
+            self.last_capture_time = time.time()
+
+    def get_latest_frame(self, block=False, timeout=None):
+        """Get latest frame from queue"""
+        import queue
+
+        try:
+            if block:
+                frame_data = self.frame_queue.get(timeout=timeout or 0.1)
+            else:
+                frame_data = self.frame_queue.get_nowait()
+            return frame_data
+        except queue.Empty:
+            return None
+
+    def get_queue_size(self):
+        """Get current frame queue size"""
+        return self.frame_queue.qsize()
+
+    def get_capture_stats(self):
+        """Get detailed capture statistics"""
+        with self.stats_lock:
+            stats = super().get_capture_stats()
+
+            if self.capture_times:
+                avg_time = sum(self.capture_times) / len(self.capture_times)
+                max_time = max(self.capture_times)
+                min_time = min(self.capture_times)
+                actual_fps = 1000.0 / avg_time if avg_time > 0 else 0
+            else:
+                avg_time = max_time = min_time = actual_fps = 0
+
+            thread_stats = {
+                'target_fps': self.target_fps,
+                'actual_fps': actual_fps,
+                'avg_capture_time_ms': avg_time,
+                'max_capture_time_ms': max_time,
+                'min_capture_time_ms': min_time,
+                'frames_captured': self.frame_id_counter,
+                'frames_dropped': self.frames_dropped,
+                'drop_rate_percent': (self.frames_dropped / max(1, self.frame_id_counter + self.frames_dropped)) * 100,
+                'queue_size': self.frame_queue.qsize(),
+                'queue_utilization': (self.frame_queue.qsize() / self.queue_size) * 100,
+                'is_capturing': self.is_capturing,
+                'last_capture_time': self.last_capture_time
+            }
+
+            stats.update(thread_stats)
+            return stats
+
+    def clear_queue(self):
+        """Clear all frames from queue"""
+        cleared = 0
+        while not self.frame_queue.empty():
+            try:
+                self.frame_queue.get_nowait()
+                cleared += 1
+            except:
+                break
+        self.log(f"🗑️ Cleared {cleared} frames from queue")
+        return cleared
+
+    def set_target_fps(self, new_fps):
+        """Change target FPS dynamically"""
+        if 1 <= new_fps <= 120:
+            old_fps = self.target_fps
+            self.target_fps = new_fps
+            self.frame_interval = 1.0 / new_fps
+            self.log(f"🔄 Target FPS changed: {old_fps} → {new_fps}")
+        else:
+            self.log(f"⚠️ Invalid FPS: {new_fps} (must be 1-120)")
+
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        try:
+            self.stop_capture()
+        except:
+            pass
