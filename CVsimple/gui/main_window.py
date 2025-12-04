@@ -50,16 +50,121 @@ class MainWindow:
 
         # NOWY: Multi-threading components
         self.thread_manager = initialize_thread_manager(logger)
-        self.use_multi_threading = False  # Feature flag for gradual rollout
+        self.use_unified_system = True  # Flag for new unified system
 
-        # Async components (initialized when multi-threading is enabled)
+        # Legacy components (kept for compatibility)
         self.thread_safe_capture = None
         self.multi_threaded_yolo = None
         self.async_combat_controller = None
 
-        # Thread coordination
-        self.coordination_thread = None
-        self.coordination_active = False
+        # New unified components
+        self.unified_controller = None
+        self.unified_display = None
+
+        # System mode: True = unified, False = legacy, 'hybrid'
+        self.system_mode = 'unified'  # Options: 'unified', 'legacy', 'hybrid'
+
+        # Auto-switch detection
+        self.auto_detect_system_mode()
+
+    def auto_detect_system_mode(self):
+        """Auto-detect and switch to best available system"""
+        self.log("🔍 Auto-detecting system mode...")
+
+        # Check if unified components are available and working
+        try:
+            # Test unified pipeline creation
+            from .unified_pipeline import create_unified_pipeline
+            test_pipeline = create_unified_pipeline(target_fps=30, logger=self.log)
+
+            # Test unified display creation
+            import tkinter as tk
+            test_root = tk.Tk()
+            test_display = UnifiedDisplay(test_root, logger=self.log)
+            test_root.destroy()
+
+            # Both tests passed - use unified system
+            self.system_mode = 'unified'
+            self.log("✅ Auto-detected unified system available")
+
+        except Exception as e:
+            self.log(f"⚠️ Unified system not available: {e}")
+            # Check if legacy components are working
+            try:
+                test_pipeline = self.thread_safe_capture is not None
+                test_detector = self.multi_threaded_yolo is not None
+                test_combat = self.async_combat_controller is not None
+                all_available = test_pipeline and test_detector and test_combat
+
+                if all_available:
+                    self.system_mode = 'hybrid'
+                    self.log("✅ Hybrid system detected")
+                else:
+                    self.system_mode = 'legacy'
+                    self.log("⚠️ Using legacy system")
+            except Exception as e2:
+                self.log(f"⚠️ Legacy system not available: {e2}")
+                self.system_mode = 'legacy'
+
+        # Update display mode based on system mode
+        if hasattr(self, 'status_var'):
+            if self.system_mode == 'unified':
+                self.status_var.set("🟢 Unified Mode")
+            elif self.system_mode == 'hybrid':
+                self.status_var.set("🔄 Hybrid Mode")
+            elif self.system_mode == 'legacy':
+                self.status_var.set("📋 Legacy Mode")
+
+        self.log(f"🎯 System mode: {self.system_mode}")
+
+    def switch_to_unified_system(self):
+        """Switch to unified system"""
+        self.log("🔄 Switching to unified system...")
+
+        try:
+            # Stop current systems
+            if self.is_running:
+                self.stop_detection()
+                self.stop_preview()
+
+            # Clear legacy components
+            self.thread_safe_capture = None
+            self.multi_threaded_yolo = None
+            self.async_combat_controller = None
+
+            # Create unified system
+            target_fps = self.fps_scale.get() if hasattr(self, 'fps_scale') else 60
+            self.pipeline = create_unified_pipeline(target_fps=target_fps, logger=self.log)
+            self.display = UnifiedDisplay(self.root, logger=self.log)
+
+            # Update UI
+            self.status_var.set("🚀 Unified Mode Active")
+            self.system_mode = 'unified'
+            self.use_unified_system = True
+
+            self.log("✅ Switched to unified system successfully")
+
+        except Exception as e:
+            self.log(f"❌ Failed to switch to unified system: {e}")
+            return False
+
+        return True
+
+    def get_system_mode(self):
+        """Get current system mode"""
+        return self.system_mode
+
+    def is_unified_system(self):
+        """Check if unified system is active"""
+        return self.system_mode == 'unified'
+
+    def is_legacy_system(self):
+        """Check if legacy system is active"""
+        return self.system_mode == 'legacy'
+
+    def is_hybrid_system(self):
+        """Check if hybrid system is active"""
+        return self.system_mode == 'hybrid'
 
         # Stan aplikacji
         self.selected_window = None
