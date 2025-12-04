@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 import torch
 import warnings
+import threading
 from packaging import version
 from ultralytics import YOLO
 

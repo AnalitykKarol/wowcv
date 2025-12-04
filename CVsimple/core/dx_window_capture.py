@@ -134,8 +134,22 @@ class DXWindowCapture:
             # Capture full screen (faster than window-specific)
             frame = self.camera.grab()
             if frame is None:
-                self.log("⚠️ dxcam returned None frame")
-                return self._fallback_capture(hwnd)
+                self.log("⚠️ dxcam returned None frame - trying to restart dxcam")
+                # Try to restart dxcam once
+                if hasattr(self, '_dx_restart_attempts'):
+                    self._dx_restart_attempts += 1
+                else:
+                    self._dx_restart_attempts = 1
+
+                if self._dx_restart_attempts <= 3:
+                    if self.restart_dxcam():
+                        frame = self.camera.grab()
+                        if frame is not None:
+                            self.log("✅ dxcam restart successful")
+
+                if frame is None:
+                    self.log("⚠️ dxcam failed to capture after restart - using fallback")
+                    return self._fallback_capture(hwnd)
 
             # Crop to window region
             try:
@@ -145,9 +159,10 @@ class DXWindowCapture:
                 if window_frame.size == 0:
                     return None
 
-                # Convert BGR to RGB for YOLO compatibility
+                # Ensure RGB format for YOLO (dxcam gives us the format we requested)
                 if self.output_color == "BGR":
                     window_frame = cv2.cvtColor(window_frame, cv2.COLOR_BGR2RGB)
+                # If output_color is "RGB", no conversion needed
 
                 # Update performance stats
                 capture_time = (time.perf_counter() - start_time) * 1000

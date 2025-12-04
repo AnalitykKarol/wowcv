@@ -420,15 +420,20 @@ class ThreadSafeWindowCapture(WindowCapture):
 
         # Initialize dxcam for high-performance capture
         self.dx_capture = None
-        self.use_dx_capture = DXCAM_AVAILABLE
-        if self.use_dx_capture:
+        # TEMPORARY: Disable dxcam due to issues
+        self.use_dx_capture = False  # DXCAM_AVAILABLE
+        DXCAM_AVAILABLE = False
+
+        if self.use_dx_capture and DXCAM_AVAILABLE:
             try:
-                self.dx_capture = DXWindowCapture(output_color="BGR")  # BGR for OpenCV compatibility
+                self.dx_capture = DXWindowCapture(output_color="RGB")  # RGB for direct YOLO input
                 self.log("🚀 dxcam initialized for high-performance capture")
             except Exception as e:
                 self.log(f"⚠️ dxcam initialization failed: {e}")
                 self.use_dx_capture = False
                 self.log("🔄 Falling back to PrintWindow")
+        else:
+            self.log("⚠️ dxcam temporarily disabled - using optimized PrintWindow")
 
         # Initialize thread-safe components
         self._init_threading()
