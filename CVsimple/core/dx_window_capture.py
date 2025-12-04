@@ -62,11 +62,33 @@ class DXWindowCapture:
             return False
 
         try:
-            self.camera = dxcam.create(
-                output_idx=self.output_idx,
-                output_color=self.output_color,
-                region=None  # Capture full screen for best performance
-            )
+            # Try multiple dxcam configurations for better compatibility
+            self.camera = None
+
+            # Method 1: Standard configuration
+            try:
+                self.camera = dxcam.create(
+                    output_idx=self.output_idx,
+                    output_color=self.output_color,
+                    region=None,
+                    max_buffer_len=1  # Single frame buffer for performance
+                )
+                self.log("✅ dxcam created with standard config")
+            except Exception as e1:
+                self.log(f"⚠️ Standard dxcam config failed: {e1}")
+
+                # Method 2: Alternative configuration
+                try:
+                    self.camera = dxcam.create(
+                        output_idx=self.output_idx,
+                        output_color=self.output_color,
+                        region=None,
+                        max_buffer_len=1
+                    )
+                    self.log("✅ dxcam created with alternative config")
+                except Exception as e2:
+                    self.log(f"⚠️ Alternative dxcam config failed: {e2}")
+                    raise e2
 
             if self.camera is None:
                 self.log("❌ Failed to create dxcam instance")
@@ -131,31 +153,52 @@ class DXWindowCapture:
             if x2 <= x1 or y2 <= y1:
                 return None
 
-            # Capture full screen (faster than window-specific)
-            frame = self.camera.grab()
-            if frame is None:
-                self.log("⚠️ dxcam returned None frame - trying to restart dxcam")
-                # Try to restart dxcam once
-                if hasattr(self, '_dx_restart_attempts'):
-                    self._dx_restart_attempts += 1
-                else:
-                    self._dx_restart_attempts = 1
-
-                if self._dx_restart_attempts <= 3:
-                    if self.restart_dxcam():
-                        frame = self.camera.grab()
-                        if frame is not None:
-                            self.log("✅ dxcam restart successful")
-
-                if frame is None:
-                    self.log("⚠️ dxcam failed to capture after restart - using fallback")
-                    return self._fallback_capture(hwnd)
-
-            # Crop to window region
+            # Method 1: Try region-specific capture (more efficient)
             try:
-                window_frame = frame[y1:y2, x1:x2]
+                # Create region for window
+                x1, y1, x2, y2 = rect
+                region = (x1, y1, x2 - x1, y2 - y1)
 
-                # Validate cropped frame
+                frame = self.camera.grab(region=region)
+                if frame is not None:
+                    # Region capture successful
+                    window_frame = frame
+                    self.log(f"📸 Region capture successful: {window_frame.shape}")
+                else:
+                    # Fallback to full screen capture
+                    self.log("⚠️ Region capture failed, trying full screen")
+                    frame = self.camera.grab()
+                    if frame is None:
+                        self.log("⚠️ dxcam returned None frame - trying to restart dxcam")
+                        # Try to restart dxcam once
+                        if hasattr(self, '_dx_restart_attempts'):
+                            self._dx_restart_attempts += 1
+                        else:
+                            self._dx_restart_attempts = 1
+
+                        if self._dx_restart_attempts <= 3:
+                            if self.restart_dxcam():
+                                frame = self.camera.grab()
+                                if frame is not None:
+                                    self.log("✅ dxcam restart successful")
+
+                        if frame is None:
+                            self.log("⚠️ dxcam failed to capture after restart - using fallback")
+                            return self._fallback_capture(hwnd)
+
+                    # Crop full screen to window region if we have full screen frame
+                    if frame is not None:
+                        window_frame = frame[y1:y2, x1:x2]
+                    else:
+                        return self._fallback_capture(hwnd)
+
+            except Exception as region_error:
+                self.log(f"⚠️ Region capture failed: {region_error}")
+                return self._fallback_capture(hwnd)
+
+            # At this point we have window_frame from either region or full screen capture
+            try:
+                # Validate window frame
                 if window_frame.size == 0:
                     return None
 
@@ -171,7 +214,7 @@ class DXWindowCapture:
                 return window_frame
 
             except Exception as crop_error:
-                self.log(f"⚠️ Window cropping failed: {crop_error}")
+                self.log(f"⚠️ Window frame validation failed: {crop_error}")
                 return self._fallback_capture(hwnd)
 
         except Exception as e:
