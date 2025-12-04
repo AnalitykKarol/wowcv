@@ -8,6 +8,8 @@ import win32con
 import time
 import random
 import math
+import threading
+import queue
 from typing import Dict, List, Optional, Tuple, Any
 from .hp_based_approach import HPBasedApproachSystem
 from .mob_looting import create_mob_looter
@@ -1155,9 +1157,6 @@ class AsyncCombatController(ReactiveCombatController):
 
     def _init_threading(self):
         """Initialize threading components"""
-        import threading
-        import queue
-
         self.combat_queue = queue.Queue(maxsize=self.combat_queue_size)
         self.action_queue = queue.Queue(maxsize=self.action_queue_size)
 

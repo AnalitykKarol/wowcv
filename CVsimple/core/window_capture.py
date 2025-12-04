@@ -1,5 +1,5 @@
 """
-Poprawiony moduł przechwytywania okien z lepszą obsługą obrazów i diagnostyką
+Poprawiony moduł przechwytywania okien z lepszą obsługą obrazów i diagnostyki
 """
 import win32gui
 import win32ui
@@ -9,6 +9,7 @@ import cv2
 import ctypes
 from ctypes import wintypes
 from PIL import Image
+import threading
 import time
 
 class WindowCapture:
