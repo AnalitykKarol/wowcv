@@ -1,5 +1,6 @@
 """
 Poprawiony moduł przechwytywania okien z lepszą obsługą obrazów i diagnostyki
+Zintegrowany z dxcam dla wysokiej wydajności
 """
 import win32gui
 import win32ui
@@ -11,6 +12,13 @@ from ctypes import wintypes
 from PIL import Image
 import threading
 import time
+
+# Try to import dxcam for high-performance capture
+try:
+    from .dx_window_capture import DXWindowCapture
+    DXCAM_AVAILABLE = True
+except ImportError:
+    DXCAM_AVAILABLE = False
 
 class WindowCapture:
     def __init__(self, logger=None):
@@ -211,31 +219,7 @@ class WindowCapture:
             # self.log(f"📊 Bitmap info: width={bmpinfo['bmWidth']}, height={bmpinfo['bmHeight']}", "debug")
             # self.log(f"📊 Bitmap data length: {len(bmpstr)}", "debug")
 
-            # Metoda 1: PIL Image.frombuffer (BGRX -> RGB)
-            try:
-                img = Image.frombuffer(
-                    'RGB',
-                    (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
-                    bmpstr, 'raw', 'BGRX', 0, 1
-                )
-
-                # Konwertuj do numpy array (już RGB z PIL)
-                img_array = np.array(img)
-                # Wyłączono intensywne logi DEBUG dla wydajności
-                # self.log(f"📷 PIL konwersja: {img_array.shape}, typ: {img_array.dtype}", "debug")
-
-                # Waliduj i napraw obraz
-                img_array = self.validate_and_fix_image_array(img_array, "PIL capture")
-                if img_array is not None:
-                    # self.log(f"✅ Obraz przechwycony przez PIL (RGB)", "debug")
-                    self.capture_stats['successful_captures'] += 1
-                    self.last_successful_capture = time.time()
-                    return img_array
-
-            except Exception as pil_error:
-                self.log(f"⚠️ PIL konwersja nie powiodła się: {str(pil_error)}", "warning")
-
-            # Metoda 2: Bezpośrednia konwersja numpy/cv2 (BGRX -> RGB)
+            # Optymalizacja: Bezpośrednia konwersja numpy (BGRX -> RGB) - BEZ PIL
             try:
                 # self.log("🔄 Próba bezpośredniej konwersji numpy...", "debug")
 
@@ -415,7 +399,7 @@ class ThreadSafeWindowCapture(WindowCapture):
     Designed for multi-threaded YOLO pipeline architecture
     """
 
-    def __init__(self, logger=None, target_fps=60, queue_size=5):
+    def __init__(self, logger=None, target_fps=60, queue_size=3):
         super().__init__(logger)
         self.target_fps = target_fps
         self.frame_interval = 1.0 / target_fps
@@ -433,6 +417,18 @@ class ThreadSafeWindowCapture(WindowCapture):
         self.frame_id_counter = 0
         self.frames_dropped = 0
         self.last_capture_time = 0
+
+        # Initialize dxcam for high-performance capture
+        self.dx_capture = None
+        self.use_dx_capture = DXCAM_AVAILABLE
+        if self.use_dx_capture:
+            try:
+                self.dx_capture = DXWindowCapture(output_color="BGR")  # BGR for OpenCV compatibility
+                self.log("🚀 dxcam initialized for high-performance capture")
+            except Exception as e:
+                self.log(f"⚠️ dxcam initialization failed: {e}")
+                self.use_dx_capture = False
+                self.log("🔄 Falling back to PrintWindow")
 
         # Initialize thread-safe components
         self._init_threading()
@@ -511,8 +507,13 @@ class ThreadSafeWindowCapture(WindowCapture):
                     time.sleep(0.1)
                     continue
 
-                # Capture frame
-                frame = super().capture_window_screenshot(self.hwnd)
+                # Capture frame using dxcam (high-performance) or fallback
+                if self.use_dx_capture and self.dx_capture:
+                    frame = self.dx_capture.capture_window_screenshot(self.hwnd)
+                    # dxcam returns RGB, but we need to match expected format
+                    # For YOLO, RGB is actually preferred
+                else:
+                    frame = super().capture_window_screenshot(self.hwnd)
 
                 if frame is not None and isinstance(frame, np.ndarray) and frame.size > 0:
                     # Create frame metadata
@@ -534,9 +535,15 @@ class ThreadSafeWindowCapture(WindowCapture):
                     except:
                         self.frames_dropped += 1
 
-                        # Optional: Drop oldest frame to make space
+                        # Memory optimization: Drop oldest frame and cleanup
                         try:
-                            self.frame_queue.get_nowait()
+                            old_frame = self.frame_queue.get_nowait()
+                            # Explicit cleanup of large numpy array
+                            if old_frame and 'frame' in old_frame:
+                                del old_frame['frame']
+                                del old_frame
+                            import gc
+                            gc.collect()
                             self.frame_queue.put_nowait(frame_data)
                         except:
                             pass
@@ -576,12 +583,32 @@ class ThreadSafeWindowCapture(WindowCapture):
 
         try:
             if block:
-                frame_data = self.frame_queue.get(timeout=timeout or 0.1)
+                frame_data = self.frame_queue.get(timeout=timeout or 0.016)  # 16ms = 60 FPS
             else:
                 frame_data = self.frame_queue.get_nowait()
             return frame_data
         except queue.Empty:
             return None
+
+    def get_latest_frame_non_blocking(self):
+        """Get latest frame, dropping old frames to ensure freshness"""
+        frame_data = None
+        dropped = 0
+
+        # Get all frames from queue, keep only the newest
+        while not self.frame_queue.empty():
+            try:
+                frame_data = self.frame_queue.get_nowait()
+                dropped += 1
+            except queue.Empty:
+                break
+
+        if dropped > 1:
+            self.frames_dropped += (dropped - 1)
+            if self.logger:
+                self.logger.debug(f"🔥 Dropped {dropped-1} old frames to get latest")
+
+        return frame_data
 
     def get_queue_size(self):
         """Get current frame queue size"""
@@ -600,6 +627,11 @@ class ThreadSafeWindowCapture(WindowCapture):
             else:
                 avg_time = max_time = min_time = actual_fps = 0
 
+            # Get dxcam performance stats if available
+            dx_stats = {}
+            if self.use_dx_capture and self.dx_capture:
+                dx_stats = self.dx_capture.get_performance_stats()
+
             thread_stats = {
                 'target_fps': self.target_fps,
                 'actual_fps': actual_fps,
@@ -612,7 +644,11 @@ class ThreadSafeWindowCapture(WindowCapture):
                 'queue_size': self.frame_queue.qsize(),
                 'queue_utilization': (self.frame_queue.qsize() / self.queue_size) * 100,
                 'is_capturing': self.is_capturing,
-                'last_capture_time': self.last_capture_time
+                'last_capture_time': self.last_capture_time,
+                # dxcam specific stats
+                'capture_method': 'dxcam' if self.use_dx_capture else 'PrintWindow',
+                'dx_available': DXCAM_AVAILABLE,
+                'dx_stats': dx_stats
             }
 
             stats.update(thread_stats)

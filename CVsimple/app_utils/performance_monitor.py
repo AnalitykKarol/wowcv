@@ -47,7 +47,7 @@ class PerformanceMonitor:
     Real-time performance monitoring system for CVsimple
     """
 
-    def __init__(self, history_size: int = 100, update_interval: float = 0.1):
+    def __init__(self, history_size: int = 100, update_interval: float = 0.5):
         self.history_size = history_size
         self.update_interval = update_interval
 

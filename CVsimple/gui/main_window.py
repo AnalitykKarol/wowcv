@@ -2319,11 +2319,21 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                         except Exception as combat_error:
                             self.log_message(f"Błąd combat controller (brak ramki): {str(combat_error)}", "ERROR")
 
-            # Record frame processing time at the end of each iteration
+            # Record frame processing time and implement proper FPS limiting
                 frame_time = (time.perf_counter() - frame_start_time) * 1000
                 self.performance_monitor.record_frame_time(frame_time)
 
-                time.sleep(max(0.02, 1 / fps))
+                # Proper FPS limiting with frame skipping
+                target_frame_time_ms = 1000.0 / fps
+                processing_time_ms = frame_time
+                sleep_time_ms = target_frame_time_ms - processing_time_ms
+
+                if sleep_time_ms > 5:  # Only sleep if we have time (more than 5ms)
+                    time.sleep(sleep_time_ms / 1000.0)
+                elif processing_time_ms > target_frame_time_ms * 1.5:  # Frame skipping
+                    self.log_message(f"⚠️ Frame processing too slow: {processing_time_ms:.1f}ms > {target_frame_time_ms:.1f}ms (skipping)", "debug")
+                    # Skip next frame to catch up
+                    time.sleep(target_frame_time_ms * 2 / 1000.0)
 
             except Exception as e:
                 self.log_message(f"Błąd głównej pętli Enhanced YOLO: {str(e)}", "ERROR")
@@ -2924,11 +2934,11 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                 queue_size=5
             )
 
-            # Initialize Multi-Threaded YOLO Detector
+            # Initialize Multi-Threaded YOLO Detector (optimized for low memory)
             self.multi_threaded_yolo = MultiThreadedYOLODetector(
                 logger=self.logger,
                 inference_queue_size=3,
-                results_queue_size=10
+                results_queue_size=8
             )
 
             # Initialize Async Combat Controller
@@ -3016,8 +3026,13 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
 
                 try:
                     # Step 1: Get frame from capture thread
-                    frame_data = self.thread_safe_capture.get_latest_frame(block=True, timeout=0.1)
+                    frame_data = self.thread_safe_capture.get_latest_frame_non_blocking()
                     if frame_data is None:
+                        # DEBUG: Check queue size to diagnose capture issues
+                        queue_size = self.thread_safe_capture.get_queue_size()
+                        if queue_size == 0:
+                            self.logger(f"⚠️ Capture queue empty - capture thread not producing frames!")
+                        time.sleep(0.001)  # 1ms sleep to prevent CPU hogging
                         continue
 
                     # Record capture latency
@@ -3031,27 +3046,43 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                         frame_id=frame_data['frame_id'],
                         timestamp=frame_data['timestamp']
                     ):
-                        # Step 3: Queue detections for combat (if combat mode)
-                        results = self.multi_threaded_yolo.get_latest_results(block=True, timeout=0.2)
-                        if results:
-                            inference_latency = results['inference_time_ms']
-                            self.performance_monitor.record_inference_latency(inference_latency)
+                        self.logger(f"⚠️ YOLO inference queue full - frame dropped!")
+                        continue
 
-                            if self.combat_mode:
-                                if self.async_combat_controller.queue_detections(
-                                    results['detections'],
-                                    self.selected_window['hwnd'],
-                                    results['frame_id'],
-                                    results['timestamp']
-                                ):
-                                    # Step 4: Get combat actions (non-blocking)
-                                    actions = self.async_combat_controller.get_latest_actions()
-                                    if actions:
-                                        combat_latency = actions['processing_time_ms']
-                                        self.performance_monitor.record_combat_latency(combat_latency)
+                    # Step 3: Queue detections for combat (if combat mode)
+                    results = self.multi_threaded_yolo.get_latest_results(block=False)  # Non-blocking!
+                    if results:
+                        inference_latency = results['inference_time_ms']
+                        self.performance_monitor.record_inference_latency(inference_latency)
+
+                        # DEBUG: Log detection count
+                        detection_count = len(results['detections']) if results['detections'] else 0
+                        if detection_count > 0:
+                            self.logger(f"🔍 YOLO detected {detection_count} objects")
+
+                        if self.combat_mode:
+                            if self.async_combat_controller.queue_detections(
+                                results['detections'],
+                                self.selected_window['hwnd'],
+                                results['frame_id'],
+                                results['timestamp']
+                            ):
+                                self.logger(f"✅ Detections queued to combat: {detection_count} objects")
+                                # Step 4: Get combat actions (non-blocking)
+                                actions = self.async_combat_controller.get_latest_actions()
+                                if actions:
+                                    combat_latency = actions['processing_time_ms']
+                                    self.performance_monitor.record_combat_latency(combat_latency)
+                                    if actions.get('mode') == 'exploration':
+                                        self.logger(f"🔄 Combat controller in exploration mode")
+                                    elif actions.get('mode') == 'combat':
+                                        self.logger(f"⚔️ Combat controller in combat mode")
+
+                        else:
+                            # DEBUG: No YOLO results available
+                            self.logger("⚠️ No YOLO results available - character moving blind!")
 
                         # Update performance monitor queue sizes
-                        self.performance_monitor.update_queue_size("capture_queue", self.thread_safe_capture.get_queue_size())
                         self.performance_monitor.update_queue_size("inference_queue", self.multi_threaded_yolo.get_queue_sizes()['inference_queue'])
                         self.performance_monitor.update_queue_size("results_queue", self.multi_threaded_yolo.get_queue_sizes()['results_queue'])
                         if self.async_combat_controller:

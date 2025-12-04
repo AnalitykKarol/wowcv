@@ -39,6 +39,10 @@ class ReactiveCombatController:
         # NEW: Grace period key 7 system
         self.grace_key7_done = False  # Flag czy klawisz 7 już naciśnięty w tym grace period
 
+        # Detection synchronization
+        self.last_detection_time = 0  # Track last time we received detections
+        self.detection_stale = False  # Flag if detection data is stale
+
         # Screen configuration - defaults, will be updated by configure_screen_size()
         self.screen_width = 1920
         self.screen_height = 1080
@@ -664,6 +668,21 @@ class ReactiveCombatController:
         """Main update loop - APPROACH DOESN'T BLOCK ATTACKS AND STEERING"""
         current_time = time.time()
 
+        # === DETECTION SYNCHRONIZATION CHECK ===
+        if detections and len(detections) > 0:
+            self.last_detection_time = current_time
+            self.detection_stale = False
+            if self.mode == "exploration":
+                self.log(f"🎯 Fresh detections received in exploration: {len(detections)} enemies", "debug")
+        else:
+            # Check if detection data is stale
+            if self.last_detection_time > 0:
+                time_since_detection = current_time - self.last_detection_time
+                if time_since_detection > 1.0:  # 1 second without detections
+                    if not self.detection_stale:  # Log once when it becomes stale
+                        self.log(f"⚠️ Detection data became stale after {time_since_detection:.1f}s", "debug")
+                    self.detection_stale = True
+
         # === EMERGENCY HEALING CHECK - HIGHEST PRIORITY ===
         current_hp = self.get_current_hp_from_gui()
         emergency_config = self.healing_config['emergency']
@@ -845,8 +864,10 @@ class ReactiveCombatController:
             )
 
             if should_run_continuous:
+                # Pass last detection time to movement system for synchronization
+                last_detection_time = getattr(self, 'last_detection_time', None)
                 self.continuous_movement.update_continuous_movement(
-                    hwnd, self.mode, self.send_key_down, self.send_key_up
+                    hwnd, self.mode, self.send_key_down, self.send_key_up, last_detection_time
                 )
 
                 # Handle backup end
@@ -855,8 +876,12 @@ class ReactiveCombatController:
                     if current_time - self.continuous_movement.backup_start_time >= self.continuous_movement.backup_duration:
                         self.continuous_movement.handle_backup_end(hwnd, self.send_key_up)
 
-        # === GŁÓWNA LOGIKA TRYBÓW - NOWA: APPROACH NIE BLOKUJE TEJ SEKCJI ===
+        # === GŁÓWNA LOGIKA TRYBÓW - DETECTION SYNCHRONIZATION ===
         if enemies and closest_enemy:  # DODANE: sprawdź czy closest_enemy istnieje
+            # CRITICAL: Check if detection data is fresh before combat actions
+            if self.detection_stale:
+                self.log("⚠️ Detection data stale - skipping combat actions", "debug")
+                return  # Skip all combat logic if data is stale
             # COMBAT MODE - UŻYWA TEGO SAMEGO closest_enemy co approach
             enemy_x = closest_enemy.get('center_x', self.screen_center_x)
             enemy_y = closest_enemy.get('center_y', self.screen_center_y)
@@ -1132,7 +1157,7 @@ class AsyncCombatController(ReactiveCombatController):
     Designed for multi-threaded YOLO pipeline architecture
     """
 
-    def __init__(self, logger=None, combat_queue_size=5, action_queue_size=10):
+    def __init__(self, logger=None, combat_queue_size=15, action_queue_size=25):
         super().__init__(logger)
 
         # Queue configuration
@@ -1280,8 +1305,34 @@ class AsyncCombatController(ReactiveCombatController):
         self.log("🛑 Combat worker stopped")
 
     def _process_combat_logic(self, detections, hwnd, frame_id):
-        """Process combat logic (delegate to parent class)"""
+        """Process combat logic only with fresh detection data"""
         try:
+            # Check detection data freshness - CRITICAL for synchronization
+            current_time = time.time()
+            if detections and len(detections) > 0:
+                # Fresh detections available - proceed with combat
+                self.last_detection_time = current_time
+                self.detection_stale = False
+                self.log(f"🎯 Processing fresh detections: {len(detections)} enemies", "debug")
+            else:
+                # No detections - check if we should stop movement
+                if hasattr(self, 'last_detection_time'):
+                    time_since_detection = current_time - self.last_detection_time
+                    if time_since_detection > 0.5:  # 500ms without detections = stale
+                        self.detection_stale = True
+                        self.log(f"⚠️ No detections for {time_since_detection:.1f}s - stopping movement", "debug")
+                        # Emergency stop all movement
+                        self.stop_movement(hwnd)
+                        # Skip combat logic if no recent data
+                        return {
+                            'error': 'Stale detection data',
+                            'frame_id': frame_id,
+                            'timestamp': current_time,
+                            'detection_age': time_since_detection
+                        }
+                else:
+                    self.last_detection_time = current_time
+
             # Update parent controller with detections
             self.update(hwnd, detections)
 

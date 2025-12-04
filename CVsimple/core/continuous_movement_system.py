@@ -127,8 +127,8 @@ class ContinuousMovementSystem:
         self.log("🛑 Continuous movement STOPPED")
         return True
 
-    def update_continuous_movement(self, hwnd: int, mode: str, send_key_down_func, send_key_up_func):
-        """Update continuous movement system"""
+    def update_continuous_movement(self, hwnd: int, mode: str, send_key_down_func, send_key_up_func, last_detection_time=None):
+        """Update continuous movement system with detection validation"""
         if not self.enabled:
             return
 
@@ -137,6 +137,15 @@ class ContinuousMovementSystem:
             if self.w_always_active:
                 self.stop_continuous_movement(hwnd, send_key_up_func)
             return
+
+        # CRITICAL: Check detection data freshness
+        current_time = time.time()
+        if last_detection_time is not None:
+            time_since_detection = current_time - last_detection_time
+            if time_since_detection > 1.0:  # No detections for 1 second
+                self.log(f"⚠️ No detections for {time_since_detection:.1f}s - stopping exploration movement")
+                self.stop_continuous_movement(hwnd, send_key_up_func)
+                return
 
         # Start system if not active
         if not self.w_always_active:

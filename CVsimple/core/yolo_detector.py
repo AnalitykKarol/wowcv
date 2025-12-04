@@ -516,7 +516,7 @@ class MultiThreadedYOLODetector(OptimizedYOLODetector):
     Designed for async processing pipeline to achieve 30+ FPS performance
     """
 
-    def __init__(self, logger=None, inference_queue_size=3, results_queue_size=10):
+    def __init__(self, logger=None, inference_queue_size=3, results_queue_size=8):
         super().__init__(logger)
 
         # Queue configuration
@@ -625,7 +625,7 @@ class MultiThreadedYOLODetector(OptimizedYOLODetector):
         while self.is_running:
             try:
                 # Get frame from queue (blocking with timeout)
-                frame_data = self.inference_queue.get(timeout=0.1)
+                frame_data = self.inference_queue.get(timeout=0.016)  # 16ms = 60 FPS
 
                 if frame_data is None:  # Poison pill
                     continue
@@ -786,7 +786,7 @@ class MultiThreadedYOLODetector(OptimizedYOLODetector):
 
         try:
             if block:
-                result_data = self.results_queue.get(timeout=timeout or 0.1)
+                result_data = self.results_queue.get(timeout=timeout or 0.016)  # 16ms = 60 FPS
             else:
                 result_data = self.results_queue.get_nowait()
             return result_data
