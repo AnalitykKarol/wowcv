@@ -16,6 +16,7 @@ from core.combat_controller import ReactiveCombatController
 from core.hp_bar_analyzer import PlayerBarsAnalyzer  # NOWY IMPORT
 from utils.preset_manager import PresetManager  # NOWY IMPORT
 from gui.preset_dialog import PresetDialog  # NOWY IMPORT
+from app_utils.performance_monitor import PerformanceMonitor  # NOWY IMPORT
 
 class MainWindow:
     def __init__(self, root, logger):
@@ -42,6 +43,10 @@ class MainWindow:
         self.bars_analysis_active = False
         self.bars_thread = None
 
+        # NOWY: Performance Monitor
+        self.performance_monitor = PerformanceMonitor()
+        self.performance_monitor.start_monitoring()
+
         # Stan aplikacji
         self.selected_window = None
         self.yolo_active = False
@@ -61,6 +66,13 @@ class MainWindow:
         self.hp_value_label = None
         self.mana_value_label = None
         self.bars_last_update_label = None
+
+        # NOWE: Performance Metrics GUI komponenty
+        self.fps_label = None
+        self.latency_label = None
+        self.cpu_label = None
+        self.memory_label = None
+        self.performance_frame = None
 
         # NOWE: Pozycje pasków (domyślne wartości)
         self.hp_x_var = tk.StringVar(value="120")
@@ -321,6 +333,7 @@ class MainWindow:
 
         self.setup_control_tab()
         self.setup_preview_tab()
+        self.setup_performance_tab()  # NOWE
         self.setup_settings_tab()
         self.setup_diagnostic_tab()
 
@@ -1060,6 +1073,307 @@ Użyj przycisków powyżej aby przeprowadzić testy:
         self.current_image = None
         self.canvas_image_id = None
         self.latest_detections = []
+
+    def setup_performance_tab(self):
+        """Zakładka monitorowania wydajności"""
+        performance_frame = ttk.Frame(self.notebook)
+        self.notebook.add(performance_frame, text="📊 Performance")
+
+        # Configure grid layout
+        performance_frame.grid_rowconfigure(1, weight=1)
+        performance_frame.grid_columnconfigure(0, weight=1)
+
+        # Header frame
+        header_frame = ttk.Frame(performance_frame)
+        header_frame.grid(row=0, column=0, sticky='ew', padx=10, pady=10)
+
+        title_label = ttk.Label(header_frame, text="📊 Monitorowanie Wydajności",
+                               font=('Arial', 14, 'bold'))
+        title_label.pack(side='left')
+
+        # Control buttons
+        control_frame = ttk.Frame(header_frame)
+        control_frame.pack(side='right')
+
+        ttk.Button(control_frame, text="🔄 Reset Metrics",
+                  command=self.reset_performance_metrics).pack(side='left', padx=(0, 5))
+        ttk.Button(control_frame, text="📈 Export Report",
+                  command=self.export_performance_report).pack(side='left', padx=(0, 5))
+        ttk.Button(control_frame, text="⚠️ Check Alerts",
+                  command=self.check_performance_alerts).pack(side='left')
+
+        # Main performance display area
+        self.performance_frame = ttk.Frame(performance_frame)
+        self.performance_frame.grid(row=1, column=0, sticky='nsew', padx=10, pady=(0, 10))
+
+        # Create performance sections
+        self._setup_performance_display()
+
+        # Start performance update timer
+        self.performance_update_timer()
+
+    def _setup_performance_display(self):
+        """Setup the performance metrics display"""
+        # Main container with two columns
+        main_container = ttk.Frame(self.performance_frame)
+        main_container.pack(fill='both', expand=True)
+
+        main_container.grid_columnconfigure(0, weight=1)
+        main_container.grid_columnconfigure(1, weight=1)
+        main_container.grid_rowconfigure(0, weight=1)
+        main_container.grid_rowconfigure(1, weight=1)
+
+        # === LEFT COLUMN ===
+        left_frame = ttk.Frame(main_container)
+        left_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+
+        # Performance Metrics Frame
+        metrics_frame = ttk.LabelFrame(left_frame, text="⚡ Metryki Wydajności", padding=15)
+        metrics_frame.pack(fill='both', expand=True, pady=(0, 10))
+
+        # FPS Display
+        fps_container = ttk.Frame(metrics_frame)
+        fps_container.pack(fill='x', pady=(0, 10))
+
+        ttk.Label(fps_container, text="🎯 FPS:", font=('Arial', 12, 'bold')).pack(side='left')
+        self.fps_label = ttk.Label(fps_container, text="0.0",
+                                  font=('Arial', 16, 'bold'), foreground='green')
+        self.fps_label.pack(side='left', padx=(10, 0))
+
+        # Latency Breakdown
+        latency_frame = ttk.Frame(metrics_frame)
+        latency_frame.pack(fill='x', pady=(0, 10))
+
+        ttk.Label(latency_frame, text="⏱️ Opóźnienia:", font=('Arial', 11, 'bold')).pack(anchor='w')
+
+        self.latency_label = ttk.Label(latency_frame, text="Capture: 0ms | Inference: 0ms | Combat: 0ms",
+                                     font=('Consolas', 10))
+        self.latency_label.pack(anchor='w', padx=(20, 0))
+
+        # Frame Statistics
+        stats_frame = ttk.Frame(metrics_frame)
+        stats_frame.pack(fill='x')
+
+        ttk.Label(stats_frame, text="📈 Statystyki Ramek:", font=('Arial', 11, 'bold')).pack(anchor='w')
+
+        self.frame_stats_label = ttk.Label(stats_frame, text="Przetworzone: 0 | Porzucone: 0 (0.0%)",
+                                        font=('Consolas', 10))
+        self.frame_stats_label.pack(anchor='w', padx=(20, 0))
+
+        # System Resources Frame
+        resources_frame = ttk.LabelFrame(left_frame, text="💻 Zasoby Systemowe", padding=15)
+        resources_frame.pack(fill='both', expand=True)
+
+        # CPU Usage
+        cpu_container = ttk.Frame(resources_frame)
+        cpu_container.pack(fill='x', pady=(0, 10))
+
+        ttk.Label(cpu_container, text="🖥️ CPU:", font=('Arial', 11, 'bold')).pack(side='left')
+        self.cpu_label = ttk.Label(cpu_container, text="0.0%", font=('Consolas', 10))
+        self.cpu_label.pack(side='left', padx=(10, 0))
+
+        # Memory Usage
+        mem_container = ttk.Frame(resources_frame)
+        mem_container.pack(fill='x', pady=(0, 10))
+
+        ttk.Label(mem_container, text="💾 RAM:", font=('Arial', 11, 'bold')).pack(side='left')
+        self.memory_label = ttk.Label(mem_container, text="0.0%", font=('Consolas', 10))
+        self.memory_label.pack(side='left', padx=(10, 0))
+
+        # GPU Memory (if available)
+        self.gpu_container = ttk.Frame(resources_frame)
+        self.gpu_container.pack(fill='x')
+
+        ttk.Label(self.gpu_container, text="🎮 GPU:", font=('Arial', 11, 'bold')).pack(side='left')
+        self.gpu_label = ttk.Label(self.gpu_container, text="0.0%", font=('Consolas', 10))
+        self.gpu_label.pack(side='left', padx=(10, 0))
+
+        # === RIGHT COLUMN ===
+        right_frame = ttk.Frame(main_container)
+        right_frame.grid(row=0, column=1, sticky='nsew', padx=(5, 0))
+
+        # Queue Status Frame
+        queue_frame = ttk.LabelFrame(right_frame, text="📦 Status Kolejek", padding=15)
+        queue_frame.pack(fill='both', expand=True, pady=(0, 10))
+
+        self.queue_status_text = tk.Text(queue_frame, height=8, font=('Consolas', 9), wrap='word')
+        queue_scrollbar = ttk.Scrollbar(queue_frame, orient='vertical', command=self.queue_status_text.yview)
+        self.queue_status_text.configure(yscrollcommand=queue_scrollbar.set)
+
+        self.queue_status_text.pack(side='left', fill='both', expand=True)
+        queue_scrollbar.pack(side='right', fill='y')
+
+        # Performance Alerts Frame
+        alerts_frame = ttk.LabelFrame(right_frame, text="⚠️ Alerty Wydajności", padding=15)
+        alerts_frame.pack(fill='both', expand=True)
+
+        self.alerts_text = tk.Text(alerts_frame, height=8, font=('Consolas', 9), wrap='word')
+        alerts_scrollbar = ttk.Scrollbar(alerts_frame, orient='vertical', command=self.alerts_text.yview)
+        self.alerts_text.configure(yscrollcommand=alerts_scrollbar.set)
+
+        self.alerts_text.pack(side='left', fill='both', expand=True)
+        alerts_scrollbar.pack(side='right', fill='y')
+
+        # === BOTTOM FULL WIDTH ===
+        bottom_frame = ttk.Frame(main_container)
+        bottom_frame.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(10, 0))
+
+        # Performance Chart (placeholder for future enhancement)
+        chart_frame = ttk.LabelFrame(bottom_frame, text="📈 Wykres Wydajności", padding=10)
+        chart_frame.pack(fill='x')
+
+        chart_placeholder = ttk.Label(chart_frame,
+                                    text="📊 Wykresy wydajności w czasie rzeczywistym (w planie)",
+                                    font=('Arial', 10, 'italic'))
+        chart_placeholder.pack(pady=20)
+
+        # Initialize display
+        self.update_performance_display()
+
+    def performance_update_timer(self):
+        """Timer for updating performance display"""
+        try:
+            self.update_performance_display()
+            self.update_queue_status()
+            self.update_performance_alerts()
+        except Exception as e:
+            self.log_message(f"Błąd aktualizacji performance: {str(e)}", "ERROR")
+
+        # Schedule next update
+        self.root.after(500, self.performance_update_timer)  # Update every 500ms
+
+    def update_performance_display(self):
+        """Update performance metrics display"""
+        try:
+            metrics = self.performance_monitor.get_current_metrics()
+
+            # Update FPS with color coding
+            fps_text = f"{metrics.fps:.1f}"
+            fps_color = 'green' if metrics.fps >= 30 else 'orange' if metrics.fps >= 20 else 'red'
+            self.fps_label.config(text=fps_text, foreground=fps_color)
+
+            # Update latency breakdown
+            latency_text = (f"Capture: {metrics.capture_latency:.1f}ms | "
+                          f"Inference: {metrics.inference_latency:.1f}ms | "
+                          f"Combat: {metrics.combat_latency:.1f}ms")
+            self.latency_label.config(text=latency_text)
+
+            # Update frame statistics
+            frame_stats_text = (f"Przetworzone: {metrics.frames_processed:,} | "
+                              f"Porzucone: {metrics.frames_dropped:,} ({metrics.frame_drops_rate:.1f}%)")
+            self.frame_stats_label.config(text=frame_stats_text)
+
+            # Update system resources
+            self.cpu_label.config(text=f"{metrics.cpu_utilization:.1f}%")
+            self.memory_label.config(text=f"{metrics.memory_usage:.1f}%")
+
+            # Update GPU memory if available
+            if self.performance_monitor.gpu_available:
+                self.gpu_label.config(text=f"{metrics.gpu_memory_usage:.1f}%")
+            else:
+                self.gpu_label.config(text="N/A")
+
+        except Exception as e:
+            self.log_message(f"Błąd aktualizacji metryk: {str(e)}", "ERROR")
+
+    def update_queue_status(self):
+        """Update queue status display"""
+        try:
+            metrics = self.performance_monitor.get_current_metrics()
+
+            self.queue_status_text.delete(1.0, tk.END)
+
+            if metrics.queue_sizes:
+                status_text = "=== STATUS KOLEJEK ===\n\n"
+                for queue_name, size in metrics.queue_sizes.items():
+                    # Color coding based on queue size
+                    status = "✅ OK" if size <= 3 else "⚠️ Wysoka" if size <= 7 else "🚨 Przepełniona"
+                    status_text += f"📦 {queue_name}: {size} pozycji [{status}]\n"
+            else:
+                status_text = "Brak aktywnych kolejek\n"
+
+            self.queue_status_text.insert(1.0, status_text)
+
+        except Exception as e:
+            self.log_message(f"Błąd aktualizacji statusu kolejek: {str(e)}", "ERROR")
+
+    def update_performance_alerts(self):
+        """Update performance alerts display"""
+        try:
+            alerts = self.performance_monitor.check_performance_alerts()
+
+            self.alerts_text.delete(1.0, tk.END)
+
+            if alerts:
+                alert_text = "=== ALERTY WYDAJNOŚCI ===\n\n"
+                for alert in alerts:
+                    alert_text += f"{alert}\n"
+            else:
+                alert_text = "✅ Brak alertów wydajności\nWszystkie parametry w normie."
+
+            self.alerts_text.insert(1.0, alert_text)
+
+        except Exception as e:
+            self.log_message(f"Błąd aktualizacji alertów: {str(e)}", "ERROR")
+
+    def reset_performance_metrics(self):
+        """Reset all performance metrics"""
+        try:
+            self.performance_monitor.reset_metrics()
+            self.log_message("🔄 Metryki wydajności zresetowane")
+
+            # Update display immediately
+            self.update_performance_display()
+            self.update_queue_status()
+            self.update_performance_alerts()
+
+        except Exception as e:
+            self.log_message(f"Błąd resetowania metryk: {str(e)}", "ERROR")
+
+    def export_performance_report(self):
+        """Export performance report"""
+        try:
+            # Generate report filename with timestamp
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"performance_report_{timestamp}.csv"
+
+            # Export metrics
+            if self.performance_monitor.export_metrics(filename):
+                # Also generate text report
+                report_filename = f"performance_report_{timestamp}.txt"
+                report = self.performance_monitor.get_performance_report()
+
+                with open(report_filename, 'w', encoding='utf-8') as f:
+                    f.write(report)
+
+                self.log_message(f"📊 Raport wydajności wyeksportowany: {filename}")
+                messagebox.showinfo("Eksport Raportu",
+                                   f"Raport wydajności został zapisany:\n{filename}\n{report_filename}")
+            else:
+                self.log_message("❌ Błąd eksportu raportu wydajności", "ERROR")
+
+        except Exception as e:
+            self.log_message(f"Błąd eksportu raportu: {str(e)}", "ERROR")
+
+    def check_performance_alerts(self):
+        """Show performance alerts in a dialog"""
+        try:
+            alerts = self.performance_monitor.check_performance_alerts()
+            metrics = self.performance_monitor.get_performance_report()
+
+            if alerts:
+                alert_message = "⚠️ WYKRYTO PROBLEMY Z WYDAJNOŚCIĄ:\n\n"
+                alert_message += "\n".join(alerts)
+                alert_message += "\n\n" + "="*50 + "\n"
+                alert_message += metrics
+
+                messagebox.showwarning("Alerty Wydajności", alert_message)
+            else:
+                messagebox.showinfo("Status Wydajności",
+                                  "✅ Wszystkie parametry wydajności są w normie.\n\n" + metrics)
+
+        except Exception as e:
+            self.log_message(f"Błąd sprawdzania alertów: {str(e)}", "ERROR")
 
     def setup_settings_tab(self):
         """Zakładka ustawień"""
@@ -1903,16 +2217,29 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                 if not self.selected_window:
                     break
 
+                # Start timing for performance metrics
+                frame_start_time = time.perf_counter()
+
                 # Przechwytywanie obrazu
+                capture_start = time.perf_counter()
                 frame = self.window_capture.capture_window_screenshot(self.selected_window['hwnd'])
+                capture_latency = (time.perf_counter() - capture_start) * 1000
 
                 if frame is not None and frame.size > 0:
                     try:
                         self.frame_count += 1
                         self.last_frame_time = time.time()
 
+                        # Record capture latency
+                        self.performance_monitor.record_capture_latency(capture_latency)
+
                         # Uruchom wykrywanie YOLO
+                        inference_start = time.perf_counter()
                         detections = self.yolo_detector.detect(frame, confidence_threshold)
+                        inference_latency = (time.perf_counter() - inference_start) * 1000
+
+                        # Record inference latency
+                        self.performance_monitor.record_inference_latency(inference_latency)
 
                         # Zabezpieczenie: jeśli detections to None, zamień na pustą listę
                         if detections is None:
@@ -1929,10 +2256,13 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                                 conf = det.get('confidence', 0)
                                 pos = (det.get('center_x', 0), det.get('center_y', 0))
 
-                            # Tryb walki - PRZEKAŻ WYKRYCIA
+                            # Combat processing
                             if self.combat_mode:
+                                combat_start = time.perf_counter()
                                 try:
                                     self.combat_controller.update(self.selected_window['hwnd'], detections)
+                                    combat_latency = (time.perf_counter() - combat_start) * 1000
+                                    self.performance_monitor.record_combat_latency(combat_latency)
                                 except Exception as combat_error:
                                     self.log_message(f"Błąd trybu walki: {str(combat_error)}", "ERROR")
 
@@ -1946,8 +2276,11 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
 
                             # Combat mode bez wykryć - PRZEKAŻ PUSTĄ LISTĘ
                             if self.combat_mode:
+                                combat_start = time.perf_counter()
                                 try:
                                     self.combat_controller.update(self.selected_window['hwnd'], [])
+                                    combat_latency = (time.perf_counter() - combat_start) * 1000
+                                    self.performance_monitor.record_combat_latency(combat_latency)
                                 except Exception as combat_error:
                                     self.log_message(f"Błąd eksploracji: {str(combat_error)}", "ERROR")
 
@@ -1958,13 +2291,19 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                         self.latest_detections = []
 
                 else:
-                    
+                    # Record dropped frame
+                    self.performance_monitor.record_dropped_frame()
+
                     # NAWET BEZ RAMKI WYŚLIJ PUSTĄ LISTĘ
                     if self.combat_mode:
                         try:
                             self.combat_controller.update(self.selected_window['hwnd'], [])
                         except Exception as combat_error:
                             self.log_message(f"Błąd combat controller (brak ramki): {str(combat_error)}", "ERROR")
+
+            # Record frame processing time at the end of each iteration
+                frame_time = (time.perf_counter() - frame_start_time) * 1000
+                self.performance_monitor.record_frame_time(frame_time)
 
                 time.sleep(max(0.02, 1 / fps))
 
@@ -1985,6 +2324,10 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
             # NOWE: Zatrzymaj analizę pasków
             if hasattr(self, 'bars_analysis_active'):
                 self.bars_analysis_active = False
+
+            # NOWE: Zatrzymaj performance monitor
+            if hasattr(self, 'performance_monitor'):
+                self.performance_monitor.stop_monitoring()
 
         except:
             pass
