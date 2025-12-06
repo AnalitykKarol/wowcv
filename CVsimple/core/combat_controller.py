@@ -37,6 +37,11 @@ class ReactiveCombatController:
         # NEW: Grace period key 7 system
         self.grace_key7_done = False  # Flag czy klawisz 7 już naciśnięty w tym grace period
 
+        # Grace period delay system - czekaj 2-3 klatki przed aktywacją
+        self.grace_period_delay_frames = 0
+        self.grace_period_delay_needed = 3  # 3 klatki opóźnienia
+        self.last_seen_enemy_frame = False
+
         # Screen configuration - defaults, will be updated by configure_screen_size()
         self.screen_width = 1920
         self.screen_height = 1080
@@ -491,6 +496,12 @@ class ReactiveCombatController:
         if current_time - self.last_emergency_backstep < self.emergency_backstep_cooldown:
             return False
 
+        # Zwolnij klawisze przed dodaniem S
+        if self.camera_key_pressed:
+            self.send_key_up(hwnd, self.camera_key_pressed)
+            self.camera_key_pressed = None
+            self.camera_adjusting = False
+
         # Add S key without stopping other movements
         if not self.send_key_down(hwnd, self.VK_S):
             return False
@@ -712,12 +723,37 @@ class ReactiveCombatController:
 
         # === GRACE PERIOD PRIORITY CHECK (higher than post-combat healing) ===
         has_enemies = bool(enemies)
-        if not has_enemies and self.mode == "combat":
-            # Przejście do grace period ma wyższy priorytet niż post-combat healing
-            self.log("👻 Enemy disappeared - starting grace period (loot)")
-            self.mode = "grace_period"
-            self.grace_period_start_time = current_time
-            self.grace_key7_done = False  # Reset flag dla nowego grace period
+        current_frame_has_enemies = has_enemies
+
+        if self.mode == "combat":
+            if current_frame_has_enemies:
+                # Wróg jest widoczny - resetuj licznik opóźnienia
+                self.last_seen_enemy_frame = True
+                self.grace_period_delay_frames = 0
+            else:
+                # Nie ma wroga w tej klatce - sprawdź opóźnienie
+                if self.last_seen_enemy_frame:
+                    # Pierwsza klatka bez wroga - zacznij liczyć
+                    self.grace_period_delay_frames = 1
+                    self.log(f"⏳ Enemy missing - starting grace delay ({self.grace_period_delay_frames}/{self.grace_period_delay_needed})")
+                    self.last_seen_enemy_frame = False  # Ustaw na False dla kolejnych klatek
+                else:
+                    # Kolejne klatki bez wroga
+                    self.grace_period_delay_frames += 1
+                    if self.grace_period_delay_frames < self.grace_period_delay_needed:
+                        # Jeszcze nie czekano wystarczająco długo
+                        self.log(f"⏳ Grace delay: {self.grace_period_delay_frames}/{self.grace_period_delay_needed}")
+                    else:
+                        # Minął wymagany czas - aktywuj grace period
+                        self.log("👻 Enemy disappeared - starting grace period (loot)")
+                        self.mode = "grace_period"
+                        self.grace_period_start_time = current_time
+                        self.grace_key7_done = False  # Reset flag dla nowego grace period
+
+                        # ZATRZYMAJ RUCH PRZY PRZEJŚCIU DO GRACE PERIOD
+                        # Zawsze zatrzymuj continuous movement w grace period, niezależnie od flagi
+                        if self.continuous_movement.w_always_active or self.continuous_movement.backup_active:
+                            self.continuous_movement.stop_continuous_movement(hwnd, self.send_key_up)
 
         # === POST-COMBAT HEALING CHECK - SECOND PRIORITY ===
         regular_config = self.healing_config['regular']
@@ -739,6 +775,10 @@ class ReactiveCombatController:
                 self.mode = "exploration"
                 self.last_enemy_position = None
                 self.grace_key7_done = False  # Reset dla następnego razu
+
+                # PRZYWRÓĆ CONTINUOUS MOVEMENT PO GRACE PERIOD
+                if self.continuous_movement.enabled:
+                    self.continuous_movement.start_continuous_movement(hwnd, self.send_key_down)
             else:
                 # During grace period - loot and attack
                 remaining = self.grace_period_duration - elapsed
@@ -866,6 +906,10 @@ class ReactiveCombatController:
                 self.continuous_movement.stop_continuous_movement(hwnd, self.send_key_up)
                 # Reset grace period flag
                 self.grace_key7_done = False
+
+                # Reset grace period delay system
+                self.grace_period_delay_frames = 0
+                self.last_seen_enemy_frame = True
 
             self.last_enemy_position = (enemy_x, enemy_y)
             self.last_enemy_seen_time = current_time
