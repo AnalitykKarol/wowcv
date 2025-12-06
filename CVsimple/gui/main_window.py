@@ -1697,13 +1697,14 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
         self.log_message("⏹️ Podgląd zatrzymany")
 
     def preview_loop(self):
-        """Pętla podglądu z lepszą obsługą błędów"""
+        """OPTIMIZED: Pętla podglądu używająca shared frame (bez podwójnego capture)"""
         while self.preview_active:
             try:
                 if not self.selected_window:
                     break
 
-                frame = self.window_capture.capture_window_screenshot(self.selected_window['hwnd'])
+                # PERFORMANCE: Use shared frame instead of re-capturing
+                frame = getattr(self, 'shared_frame', None)
 
                 if frame is not None:
                     self.current_image = frame
@@ -1711,8 +1712,13 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                     self.last_frame_time = time.time()
                     self.root.after(0, self.scale_and_display_image, frame)
                 else:
+                    # No frame available, skip display
                     pass
-                time.sleep(1/30)
+
+                # OPTIMIZATION: Remove hardcoded 30 FPS limit
+                # Sync with detection loop FPS for smoothness
+                current_fps = getattr(self, 'cached_fps', 30)
+                time.sleep(max(0.016, 1 / max(30, current_fps)))  # 30-60 FPS
 
             except Exception as e:
                 self.log_message(f"Błąd podglądu: {str(e)}", "ERROR")
@@ -1725,10 +1731,12 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
 
     def scale_and_display_image(self, img_array):
         """
-        POPRAWIONA: Wyświetla obraz z wykryciami YOLO i paskami HP/Mana
+        OPTIMIZED: Wyświetla obraz z wykryciami YOLO i paskami HP/Mana
         """
         try:
-            self.preview_canvas.delete("preview_image")
+            # PERFORMANCE: Only delete if image exists
+            if hasattr(self, 'canvas_image_id') and self.canvas_image_id:
+                self.preview_canvas.delete(self.canvas_image_id)
             self.preview_canvas.delete("no_preview")
 
             if img_array is None or img_array.size == 0:
@@ -1821,7 +1829,11 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
             # Konwertuj do PIL i wyświetl
             try:
                 img_pil = Image.fromarray(display_image, 'RGB')
-                img_resized = img_pil.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                # PERFORMANCE: Use faster NEAREST for preview, BILINEAR for quality
+                if hasattr(self, 'high_quality_preview') and self.high_quality_preview:
+                    img_resized = img_pil.resize((new_width, new_height), Image.Resampling.BILINEAR)
+                else:
+                    img_resized = img_pil.resize((new_width, new_height), Image.Resampling.NEAREST)  # Fastest
                 img_tk = ImageTk.PhotoImage(img_resized)
 
                 x = canvas_width // 2
@@ -1893,10 +1905,20 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
 
         last_confidence_log = 0
 
+        # OPTIMIZATION: Cache values to avoid repeated GUI calls
+        cached_fps = int(self.fps_scale.get())
+        cached_confidence = float(self.confidence_scale.get())
+        last_gui_check = 0
+
         while self.yolo_active:
-            # Aktualizuj threshold i FPS w każdej klatce!
-            fps = int(self.fps_scale.get())
-            confidence_threshold = float(self.confidence_scale.get())
+            # OPTIMIZATION: Only check GUI values every 2 seconds
+            current_time = time.time()
+            if current_time - last_gui_check > 2.0:
+                cached_fps = int(self.fps_scale.get())
+                cached_confidence = float(self.confidence_scale.get())
+                last_gui_check = current_time
+            fps = cached_fps
+            confidence_threshold = cached_confidence
 
             
             try:
@@ -1923,42 +1945,28 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                             detection_count += 1
                             self.detection_count += len(detections)
 
-                            # Przekaż wykrycia do Combat Controller
-                            for i, det in enumerate(detections):
-                                name = det.get('name', 'unknown')
-                                conf = det.get('confidence', 0)
-                                pos = (det.get('center_x', 0), det.get('center_y', 0))
+                        # OPTIMIZATION: Single combat controller update per frame
+                        if self.combat_mode:
+                            try:
+                                self.combat_controller.update(self.selected_window['hwnd'], detections)
+                            except Exception as combat_error:
+                                self.log_message(f"Błąd trybu walki: {str(combat_error)}", "ERROR")
 
-                            # Tryb walki - PRZEKAŻ WYKRYCIA
-                            if self.combat_mode:
-                                try:
-                                    self.combat_controller.update(self.selected_window['hwnd'], detections)
-                                except Exception as combat_error:
-                                    self.log_message(f"Błąd trybu walki: {str(combat_error)}", "ERROR")
+                        # OPTIMIZATION: Direct assignment instead of copy
+                        self.latest_detections = detections if detections else []
 
-                            # Zapisz wykrycia dla podglądu
-                            self.latest_detections = detections.copy() if detections else []
-                            # self.log_message(f"🖼️ Zapisałem {len(self.latest_detections)} wykryć dla podglądu", "DEBUG")
-
-                        else:
-                            # BRAK WYKRYĆ
-                            self.latest_detections = []
-
-                            # Combat mode bez wykryć - PRZEKAŻ PUSTĄ LISTĘ
-                            if self.combat_mode:
-                                try:
-                                    self.combat_controller.update(self.selected_window['hwnd'], [])
-                                except Exception as combat_error:
-                                    self.log_message(f"Błąd eksploracji: {str(combat_error)}", "ERROR")
+                        # PERFORMANCE: Share frame with preview to avoid double capture
+                        self.shared_frame = frame
 
                     except Exception as detection_error:
                         self.log_message(f"Błąd Enhanced YOLO: {str(detection_error)}", "ERROR")
-                        import traceback
-                        self.log_message(f"Stack trace: {traceback.format_exc()}", "ERROR")
                         self.latest_detections = []
+                        # PERFORMANCE: Remove expensive traceback in main loop
 
                 else:
-                    
+                    # No frame available
+                    self.shared_frame = None
+
                     # NAWET BEZ RAMKI WYŚLIJ PUSTĄ LISTĘ
                     if self.combat_mode:
                         try:
@@ -1970,8 +1978,7 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
 
             except Exception as e:
                 self.log_message(f"Błąd głównej pętli Enhanced YOLO: {str(e)}", "ERROR")
-                import traceback
-                self.log_message(f"Stack trace: {traceback.format_exc()}", "ERROR")
+                # PERFORMANCE: Remove expensive traceback from main loop
                 time.sleep(1)
 
         self.log_message("🏁 Pętla Enhanced YOLO zakończona")

@@ -13,8 +13,10 @@ class ImmediateMobLooter:
     def __init__(self, logger=None):
         self.logger = logger
 
-        # Tracking mobów
+        # Tracking mobów - memory optimization
         self.recent_mob_positions: Dict[str, Tuple[float, float, float]] = {}  # {mob_hash: (x, y, last_seen_time)}
+        self.MAX_TRACKED_MOBS = 30  # Hard limit to prevent memory leaks
+        self.cleanup_counter = 0  # Counter for periodic cleanup
         self.mob_loot_timeout = 3.0  # Jak długo pamiętać pozycję moba
         self.immediate_loot_enabled = True
 
@@ -45,6 +47,21 @@ class ImmediateMobLooter:
         grid_y = int(center_y // self.detection_sensitivity) * self.detection_sensitivity
         return f"{grid_x}_{grid_y}"
 
+    def _enforce_mob_limit(self):
+        """Enforce hard limit on tracked mobs to prevent memory leaks"""
+        if len(self.recent_mob_positions) > self.MAX_TRACKED_MOBS:
+            # Remove oldest 20% of entries
+            num_to_remove = int(self.MAX_TRACKED_MOBS * 0.2)
+            oldest_items = sorted(
+                self.recent_mob_positions.items(),
+                key=lambda x: x[1][2]  # Sort by timestamp
+            )[:num_to_remove]
+
+            for mob_hash, _ in oldest_items:
+                del self.recent_mob_positions[mob_hash]
+
+            self.log(f"🧹 Memory cleanup: removed {num_to_remove} oldest mob positions")
+
     def update_and_get_disappeared(self, current_enemies: List[Dict]) -> List[Tuple[float, float]]:
         """
         Aktualizuj pozycje mobów i zwróć listę pozycji znikłych mobów
@@ -60,6 +77,11 @@ class ImmediateMobLooter:
 
         current_time = time.time()
         current_mob_hashes = set()
+
+        # Periodic cleanup every 30 frames
+        self.cleanup_counter += 1
+        if self.cleanup_counter % 30 == 0:
+            self._enforce_mob_limit()
 
         # Aktualizuj pozycje obecnych mobów
         for enemy in current_enemies:
@@ -79,6 +101,10 @@ class ImmediateMobLooter:
 
             self.recent_mob_positions[mob_hash] = (center_x, center_y, current_time)
             current_mob_hashes.add(mob_hash)
+
+            # Enforce limit immediately if we exceed it
+            if len(self.recent_mob_positions) > self.MAX_TRACKED_MOBS:
+                self._enforce_mob_limit()
 
         # Znajdź zniknięte mowy (ostatnio widziane ale nie w obecnej klatce)
         disappeared_mobs = []

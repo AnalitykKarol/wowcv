@@ -18,6 +18,12 @@ class OptimizedYOLODetector:
         self.model = None
         self.model_loaded = False
         self.class_names = []
+        self.model_path = None  # Store model path for reloading
+
+        # Memory optimization: auto-unload settings
+        self.last_inference_time = 0
+        self.unload_timeout = 180  # 3 minutes of inactivity before unload
+        self.auto_unload_enabled = True
 
         # Statystyki walidacji obrazów
         self.image_validation_stats = {
@@ -96,6 +102,7 @@ class OptimizedYOLODetector:
             if Path(model_path).exists():
                 self.log(f"🚀 Znaleziono model: {model_path}")
                 if self.load_model(model_path):
+                    self.model_path = model_path  # Store for auto-reload
                     self.log("✅ Model automatycznie załadowany!")
                     return True
 
@@ -255,13 +262,60 @@ class OptimizedYOLODetector:
             self.image_validation_stats['last_error'] = error_msg
             return None
 
+    def check_and_auto_unload(self):
+        """Check if model should be unloaded due to inactivity"""
+        if not self.auto_unload_enabled or not self.model_loaded:
+            return False
+
+        current_time = time.time()
+        if current_time - self.last_inference_time > self.unload_timeout:
+            self.unload_model()
+            return True
+        return False
+
+    def unload_model(self):
+        """Unload model from memory to free RAM"""
+        if self.model is not None:
+            self.log("🗑️ Unloading YOLO model from memory...")
+            try:
+                # Clear model reference
+                self.model = None
+                self.model_loaded = False
+
+                # Force garbage collection to free GPU/CPU memory
+                import gc
+                gc.collect()
+
+                # Clear CUDA cache if available
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    self.log("🧹 CUDA cache cleared")
+
+                self.log("✅ Model unloaded - memory freed")
+                return True
+            except Exception as e:
+                self.log(f"❌ Error unloading model: {str(e)}", "error")
+                return False
+        return False
+
+    def reload_model(self):
+        """Reload model if it was unloaded"""
+        if self.model_loaded:
+            return True
+
+        if self.model_path and Path(self.model_path).exists():
+            self.log("🔄 Reloading YOLO model...")
+            return self.load_model(self.model_path)
+        else:
+            self.log("❌ Cannot reload: no valid model path", "error")
+            return False
+
     def stop_inference_thread(self):
         """Stopuje inference - metoda wymagana przez main.py"""
         try:
             self.log("🔄 Zatrzymuję wątek YOLO inference...")
             # OptimizedYOLODetector nie używa threadingu, więc tylko logujemy
-            self.model = None
-            self.model_loaded = False
+            self.unload_model()  # Use the new unload method
             self.log("✅ YOLO inference zatrzymany")
         except Exception as e:
             self.log(f"❌ Błąd zatrzymywania inference: {str(e)}", "error")
@@ -270,9 +324,13 @@ class OptimizedYOLODetector:
         """
         GŁÓWNA METODA WYKRYWANIA - UPROSZCZONA I DZIAŁAJĄCA
         """
-        if not self.model_loaded:
-            self.log("❌ Model YOLO nie jest załadowany!", "error")
+        # Auto-reload if model was unloaded
+        if not self.model_loaded and not self.reload_model():
+            self.log("❌ Model YOLO nie jest załadowany i nie można go przeładować!", "error")
             return []
+
+        # Update last inference time for auto-unload tracking
+        self.last_inference_time = time.time()
 
         try:
             # 1. Walidacja obrazu

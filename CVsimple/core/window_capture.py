@@ -24,7 +24,27 @@ class WindowCapture:
         # Prosta metoda logowania
         self.log = print
 
-  
+        # Memory optimization: reusable buffers
+        self._buffer = None  # Reusable numpy buffer
+        self._buffer_size = (0, 0)  # Current buffer dimensions
+
+    def _get_or_create_buffer(self, width, height, channels=3):
+        """Get or create reusable buffer for image data"""
+        if (self._buffer is None or
+            self._buffer_size != (width, height) or
+            self._buffer.shape != (height, width, channels)):
+            # Create new buffer if needed
+            self._buffer = np.empty((height, width, channels), dtype=np.uint8)
+            self._buffer_size = (width, height)
+        return self._buffer
+
+    def cleanup_buffers(self):
+        """Explicit cleanup to free memory"""
+        if self._buffer is not None:
+            del self._buffer
+            self._buffer = None
+            self._buffer_size = (0, 0)
+
     def get_window_list(self):
         """Pobiera listę wszystkich widocznych okien"""
         def enum_windows_callback(hwnd, windows):
@@ -210,7 +230,7 @@ class WindowCapture:
             # self.log(f"📊 Bitmap info: width={bmpinfo['bmWidth']}, height={bmpinfo['bmHeight']}", "debug")
             # self.log(f"📊 Bitmap data length: {len(bmpstr)}", "debug")
 
-            # Metoda 1: PIL Image.frombuffer (BGRX -> RGB)
+            # Metoda 1: PIL Image.frombuffer z reusable buffer (BGRX -> RGB)
             try:
                 img = Image.frombuffer(
                     'RGB',
@@ -218,15 +238,15 @@ class WindowCapture:
                     bmpstr, 'raw', 'BGRX', 0, 1
                 )
 
-                # Konwertuj do numpy array (już RGB z PIL)
-                img_array = np.array(img)
-                # Wyłączono intensywne logi DEBUG dla wydajności
-                # self.log(f"📷 PIL konwersja: {img_array.shape}, typ: {img_array.dtype}", "debug")
+                # Użyj reusable buffer zamiast tworzyć nową tablicę
+                img_array = self._get_or_create_buffer(width, height, 3)
+
+                # Kopiuj dane PIL do reusable buffer (szybsze niż tworzenie nowej tablicy)
+                np.copyto(img_array, np.array(img))
 
                 # Waliduj i napraw obraz
                 img_array = self.validate_and_fix_image_array(img_array, "PIL capture")
                 if img_array is not None:
-                    # self.log(f"✅ Obraz przechwycony przez PIL (RGB)", "debug")
                     self.capture_stats['successful_captures'] += 1
                     self.last_successful_capture = time.time()
                     return img_array
@@ -234,37 +254,35 @@ class WindowCapture:
             except Exception as pil_error:
                 self.log(f"⚠️ PIL konwersja nie powiodła się: {str(pil_error)}", "warning")
 
-            # Metoda 2: Bezpośrednia konwersja numpy/cv2 (BGRX -> RGB)
+            # Metoda 2: Zoptymalizowana konwersja z reusable buffer (BGRX -> RGB)
             try:
-                # self.log("🔄 Próba bezpośredniej konwersji numpy...", "debug")
-
                 # Konwertuj dane bitmap do numpy array
-                img_bgr = np.frombuffer(bmpstr, dtype=np.uint8)
+                img_bgrx = np.frombuffer(bmpstr, dtype=np.uint8)
 
                 # Sprawdź czy rozmiar się zgadza
                 expected_size = width * height * 4  # BGRX = 4 bajty na piksel
-                if len(img_bgr) != expected_size:
-                    self.log(f"⚠️ Nieprawidłowy rozmiar danych: {len(img_bgr)} vs oczekiwane {expected_size}", "warning")
+                if len(img_bgrx) != expected_size:
+                    self.log(f"⚠️ Nieprawidłowy rozmiar danych: {len(img_bgrx)} vs oczekiwane {expected_size}", "warning")
                     # Spróbuj dopasować rozmiar
-                    if len(img_bgr) > expected_size:
-                        img_bgr = img_bgr[:expected_size]
+                    if len(img_bgrx) > expected_size:
+                        img_bgrx = img_bgrx[:expected_size]
                     else:
                         self.log(f"❌ Za mało danych bitmap", "error")
                         raise Exception("Za mało danych bitmap")
 
                 # Reshape do obrazu BGRX
-                img_bgr = img_bgr.reshape((height, width, 4))
+                img_bgrx = img_bgrx.reshape((height, width, 4))
 
-                # POPRAWKA: Konwertuj BGR do RGB (bez kanału alpha)
-                img_array = cv2.cvtColor(img_bgr[:,:,:3], cv2.COLOR_BGR2RGB)
+                # Użyj reusable buffer zamiast tworzyć nową tablicę
+                img_array = self._get_or_create_buffer(width, height, 3)
 
-                # Wyłączono intensywne logi DEBUG dla wydajności
-                # self.log(f"📷 Numpy konwersja: {img_array.shape}, typ: {img_array.dtype}", "debug")
+                # Konwertuj BGRX do RGB bezpośrednio do reusable buffer
+                # Używamy szybszej konwersji bez kopiowania
+                cv2.cvtColor(img_bgrx[:,:,:3], cv2.COLOR_BGR2RGB, dst=img_array)
 
                 # Waliduj i napraw obraz
-                img_array = self.validate_and_fix_image_array(img_array, "Numpy capture")
+                img_array = self.validate_and_fix_image_array(img_array, "Optimized capture")
                 if img_array is not None:
-                    # self.log(f"✅ Obraz przechwycony przez numpy (BGR->RGB)", "debug")
                     self.capture_stats['successful_captures'] += 1
                     self.last_successful_capture = time.time()
                     return img_array
@@ -311,6 +329,10 @@ class WindowCapture:
                     win32gui.ReleaseDC(hwnd, hwndDC)
                 except:
                     pass
+
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        self.cleanup_buffers()
 
     def get_capture_stats(self):
         """Zwraca statystyki przechwytywania"""
