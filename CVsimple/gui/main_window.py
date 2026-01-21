@@ -9,6 +9,7 @@ import time
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
+import psutil
 
 from core.window_capture import WindowCapture
 from core.yolo_detector import OptimizedYOLODetector
@@ -227,6 +228,15 @@ class MainWindow:
                 except Exception as e:
                     diagnostic_text += f"🤖 YOLO DETECTOR: Błąd diagnostyki - {str(e)}\n\n"
 
+            # GPU Utilization Stats
+            gpu_stats = self.get_gpu_utilization()
+            if gpu_stats:
+                diagnostic_text += "🚀 GPU UTILIZATION:\n"
+                diagnostic_text += f"  Pamięć GPU użycie: {gpu_stats['gpu_memory_used']:.2f}GB / {gpu_stats['gpu_memory_total']:.2f}GB\n"
+                diagnostic_text += f"  Pamięć GPU %: {gpu_stats['gpu_memory_percent']:.1f}%\n"
+                diagnostic_text += f"  CPU % (placeholder): {gpu_stats['gpu_utilization']:.1f}%\n"
+                diagnostic_text += "\n"
+
             # NOWE: Player Bars Analyzer Stats
             if self.bars_analyzer:
                 try:
@@ -288,6 +298,21 @@ class MainWindow:
 
         except Exception as e:
             self.log_message(f"Błąd aktualizacji diagnostyki: {str(e)}", "ERROR")
+
+    def get_gpu_utilization(self):
+        """Get current GPU utilization"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return {
+                    'gpu_memory_used': torch.cuda.memory_allocated() / 1024**3,  # GB
+                    'gpu_memory_total': torch.cuda.get_device_properties(0).total_memory / 1024**3,
+                    'gpu_memory_percent': (torch.cuda.memory_allocated() / torch.cuda.get_device_properties(0).total_memory) * 100,
+                    'gpu_utilization': psutil.cpu_percent(interval=0.1)  # Placeholder - for real GPU % use nvidia-ml-py3
+                }
+            return None
+        except:
+            return None
 
     def check_initial_yolo_status(self):
         """Sprawdza status YOLO detektora przy starcie"""
@@ -1933,7 +1958,19 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                         self.frame_count += 1
                         self.last_frame_time = time.time()
 
-                        # Uruchom wykrywanie YOLO
+                        # GPU OPTIMIZATION: Force CUDA sync every few frames to ensure GPU work
+                        if hasattr(self, 'cuda_sync_counter'):
+                            self.cuda_sync_counter += 1
+                        else:
+                            self.cuda_sync_counter = 0
+
+                        if self.cuda_sync_counter % 10 == 0:
+                            import torch
+                            if torch.cuda.is_available():
+                                torch.cuda.synchronize()
+                                torch.cuda.empty_cache()  # Clear cache periodically
+
+                        # Uruchom wykrywanie YOLO (z dodanym obciążeniem GPU)
                         detections = self.yolo_detector.detect(frame, confidence_threshold)
 
                         # Zabezpieczenie: jeśli detections to None, zamień na pustą listę

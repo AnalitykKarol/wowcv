@@ -71,7 +71,7 @@ class ReactiveCombatController:
             self.VK_5: 0.07, self.VK_6: 0.2, self.VK_7: 0.1
         }
         self.last_attack_time = 0
-        self.attack_interval = random.uniform(0.5, 1.1)
+        self.attack_interval = random.uniform(5.0, 10.0)
 
         # Emergency backstep system
         self.emergency_distance_threshold = 80
@@ -615,9 +615,13 @@ class ReactiveCombatController:
 
     # === ATTACK SYSTEM ===
     def simple_attack(self, hwnd: int) -> bool:
-        """DISABLED - Attack with weighted key selection - ALL SKILLS DISABLED"""
-        # WYLACZONE - nie uzywa zadnych skili do atakowania
-        # Tylko leczenie pod klawiszem "R" (VK_R = 0x52)
+        """Press key 1 every 5-10 seconds during combat"""
+        current_time = time.time()
+        if current_time - self.last_attack_time >= self.attack_interval:
+            if self.send_key_press(hwnd, self.VK_1):
+                self.last_attack_time = current_time
+                self.attack_interval = random.uniform(5.0, 10.0)
+                return True
         return False
 
     def heal_with_r(self, hwnd: int) -> bool:
@@ -667,6 +671,27 @@ class ReactiveCombatController:
         except Exception as e:
             self.log(f"❌ send_key_press failed: {e}")
             return False
+
+    def release_all_movement_keys(self, hwnd: int) -> bool:
+        """Zwolnij wszystkie klawisze ruchu (W, A, S, D) - bezpieczna metoda cleanup"""
+        released_any = False
+
+        # Zawsze zwolnij WSZYSTKIE klawisze ruchu dla bezpieczeństwa
+        for vk_code, name in [(self.VK_W, 'W'), (self.VK_A, 'A'),
+                               (self.VK_S, 'S'), (self.VK_D, 'D')]:
+            if self.send_key_up(hwnd, vk_code):
+                released_any = True
+
+        # Reset flag które mogą śledzić stan klawiszy
+        self.emergency_backstep_active = False
+        if self.camera_key_pressed:
+            self.camera_key_pressed = None
+            self.camera_adjusting = False
+
+        if released_any:
+            self.log("🧹 Wszystkie klawisze ruchu zwolnione (W, A, S, D)")
+
+        return released_any
 
     # === MAIN UPDATE LOOP - UPDATED WITH NEW HP/MP RECOVERY SYSTEM ===
     def update(self, hwnd: int, detections: Optional[List[Dict[str, Any]]] = None):
@@ -750,6 +775,9 @@ class ReactiveCombatController:
                         self.grace_period_start_time = current_time
                         self.grace_key7_done = False  # Reset flag dla nowego grace period
 
+                        # NOWE: Zwolnij WSZYSTKIE klawisze ruchu
+                        self.release_all_movement_keys(hwnd)
+
                         # ZATRZYMAJ RUCH PRZY PRZEJŚCIU DO GRACE PERIOD
                         # Zawsze zatrzymuj continuous movement w grace period, niezależnie od flagi
                         if self.continuous_movement.w_always_active or self.continuous_movement.backup_active:
@@ -775,6 +803,9 @@ class ReactiveCombatController:
                 self.mode = "exploration"
                 self.last_enemy_position = None
                 self.grace_key7_done = False  # Reset dla następnego razu
+
+                # NOWE: Zwolnij WSZYSTKIE klawisze ruchu przed wznowieniem ruchu
+                self.release_all_movement_keys(hwnd)
 
                 # PRZYWRÓĆ CONTINUOUS MOVEMENT PO GRACE PERIOD
                 if self.continuous_movement.enabled:
@@ -810,7 +841,8 @@ class ReactiveCombatController:
                         self.emergency_backstep_active = False
                         self.log("🚫 Emergency backstep STOPPED for post-combat healing")
 
-                    # Zatrzymaj continuous movement przed rozpoczęciem healingu
+                    # NOWE: Zwolnij WSZYSTKIE klawisze ruchu
+                    self.release_all_movement_keys(hwnd)
                     self.continuous_movement.stop_continuous_movement(hwnd, self.send_key_up)
                     self.log("🚫 Continuous movement STOPPED for post-combat healing")
 
@@ -903,6 +935,10 @@ class ReactiveCombatController:
                 self.log("🎯 Enemy detected - entering combat")
                 self.mode = "combat"
                 self.stats['combat_sessions'] += 1
+
+                # NOWE: Zwolnij WSZYSTKIE klawisze ruchu
+                self.release_all_movement_keys(hwnd)
+
                 self.continuous_movement.stop_continuous_movement(hwnd, self.send_key_up)
                 # Reset grace period flag
                 self.grace_key7_done = False
@@ -932,9 +968,8 @@ class ReactiveCombatController:
             if self.can_combat_click():
                 self.perform_right_click(hwnd, enemy_x, enemy_y, is_loot=False)
 
-            # === ATAKI I LECZENIE WYLĄCZONE ===
-            # self.simple_attack(hwnd)  # WYLĄCZONE - brak ataków skilami
-            # self.heal_with_r(hwnd)  # WYLĄCZONE - brak leczenia pod "R"
+            # === ATAK 1 co 5-10 sekund ===
+            self.simple_attack(hwnd)
 
         
         # === MOB LOOTING - PRZEKAŻ closest_enemy ===
@@ -944,17 +979,12 @@ class ReactiveCombatController:
             self.mob_looter.process_frame(self, hwnd, loot_enemies)
 
     def emergency_stop(self, hwnd: int):
-        """Emergency stop all activities - FIXED"""
-        # NEW: Stop continuous movement using modular system
-        self.continuous_movement.stop_continuous_movement(hwnd, self.send_key_up)
+        """Emergency stop all activities - UPDATED"""
+        # NOWE: Zwolnij WSZYSTKIE klawisze ruchu jako pierwsze
+        self.release_all_movement_keys(hwnd)
 
-        if self.camera_key_pressed:
-            self.send_key_up(hwnd, self.camera_key_pressed)
-            self.camera_adjusting = False
-            self.camera_key_pressed = None
-        if self.emergency_backstep_active:
-            self.send_key_up(hwnd, self.VK_S)
-            self.emergency_backstep_active = False
+        # Potem continuous movement (dla dodatkowego bezpieczeństwa)
+        self.continuous_movement.stop_continuous_movement(hwnd, self.send_key_up)
 
         self.mode = "exploration"
         self.last_enemy_position = None

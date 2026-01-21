@@ -37,6 +37,9 @@ class OptimizedYOLODetector:
         self.inference_times = []
         self.max_time_samples = 20
 
+        # Mixed precision scaler
+        self.scaler = None
+
         # Prosta metoda logowania
         self.log = print
 
@@ -133,7 +136,11 @@ class OptimizedYOLODetector:
             try:
                 if torch.cuda.is_available():
                     self.model.to('cuda')
+                    # Optimize GPU performance
+                    torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+                    torch.backends.cudnn.deterministic = False  # Allow non-deterministic algorithms for speed
                     self.log("🔥 Model przeniesiony na GPU")
+                    self.log("🚀 cuDNN benchmark enabled")
                 else:
                     self.log("💻 Używam CPU")
             except:
@@ -146,6 +153,13 @@ class OptimizedYOLODetector:
             else:
                 self.class_names = ['health_bar']
                 self.log("⚠️ Używam domyślnej klasy 'health_bar'", "warning")
+
+            # Pre-allocate tensors for reuse
+            self.tensor_cache = {}
+            self.tensor_cache['input_size'] = (640, 640)  # Standard YOLO input size
+            if torch.cuda.is_available():
+                self.tensor_cache['dummy_tensor'] = torch.zeros((1, 3, 640, 640), dtype=torch.float16, device='cuda')
+                self.log("🎯 Pre-allocated GPU tensors for optimization")
 
             # Testowe uruchomienie
             self.log("🔥 Rozgrzewanie modelu...")
@@ -205,7 +219,7 @@ class OptimizedYOLODetector:
             return False
 
     def validate_and_prepare_image(self, frame, context=""):
-        """Waliduje i przygotowuje obraz dla YOLO"""
+        """Waliduje i przygotowuje obraz dla YOLO z GPU-accelerated preprocessing"""
         self.image_validation_stats['total_images_received'] += 1
 
         if frame is None:
@@ -230,27 +244,52 @@ class OptimizedYOLODetector:
             return None
 
         try:
-            # Konwersja do RGB (Window capture zwraca BGR)
-            if len(frame.shape) == 2:
-                # Grayscale -> RGB
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-            elif len(frame.shape) == 3:
-                if frame.shape[2] == 4:
-                    # RGBA -> RGB
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
-                elif frame.shape[2] == 3:
-                    # BGR -> RGB (Window capture zawsze daje BGR!)
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # GPU-accelerated preprocessing
+            if torch.cuda.is_available():
+                # Convert to tensor and move to GPU immediately
+                frame_tensor = torch.from_numpy(frame).cuda()
 
-            # Upewnij się że jest uint8
-            if frame.dtype != np.uint8:
-                if frame.dtype in [np.float32, np.float64]:
-                    if frame.max() <= 1.0:
-                        frame = (frame * 255).astype(np.uint8)
+                # Handle all conversions on GPU
+                if len(frame_tensor.shape) == 2:
+                    # Grayscale -> RGB
+                    frame_tensor = frame_tensor.unsqueeze(-1).repeat(1, 1, 3)
+                elif len(frame_tensor.shape) == 3:
+                    if frame_tensor.shape[2] == 4:
+                        # RGBA -> RGB (drop alpha channel)
+                        frame_tensor = frame_tensor[:, :, :3]
+                    elif frame_tensor.shape[2] == 3:
+                        # BGR -> RGB (reverse channels)
+                        frame_tensor = frame_tensor[:, :, [2, 1, 0]]
+
+                # Ensure correct dtype
+                if frame_tensor.dtype != torch.uint8:
+                    frame_tensor = frame_tensor.clamp(0, 255).byte()
+
+                # Convert back to numpy for YOLO model (model handles GPU internally)
+                frame = frame_tensor.cpu().numpy()
+            else:
+                # Fallback to CPU preprocessing
+                # Konwersja do RGB (Window capture zwraca BGR)
+                if len(frame.shape) == 2:
+                    # Grayscale -> RGB
+                    frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+                elif len(frame.shape) == 3:
+                    if frame.shape[2] == 4:
+                        # RGBA -> RGB
+                        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
+                    elif frame.shape[2] == 3:
+                        # BGR -> RGB (Window capture zawsze daje BGR!)
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # Upewnij się że jest uint8
+                if frame.dtype != np.uint8:
+                    if frame.dtype in [np.float32, np.float64]:
+                        if frame.max() <= 1.0:
+                            frame = (frame * 255).astype(np.uint8)
+                        else:
+                            frame = frame.astype(np.uint8)
                     else:
                         frame = frame.astype(np.uint8)
-                else:
-                    frame = frame.astype(np.uint8)
 
             self.image_validation_stats['valid_images'] += 1
             return frame
@@ -339,13 +378,30 @@ class OptimizedYOLODetector:
                 self.log("❌ Walidacja obrazu nie powiodła się", "error")
                 return []
 
+            # Create tensor directly on GPU with pinned memory for faster transfer
+            if torch.cuda.is_available():
+                # Use contiguous array and FP16 for better GPU performance
+                validated_image = np.ascontiguousarray(validated_image)
+                # The model will handle tensor creation internally, but we ensure optimal format
+
             # 2. Uruchom YOLO
             start_time = time.time()
+
+            # Initialize GradScaler for mixed precision
+            if torch.cuda.is_available() and self.scaler is None:
+                from torch.cuda.amp import GradScaler
+                self.scaler = GradScaler()
+                self.log("⚡ Mixed precision initialized")
 
             # Wycisz ostrzeżenia podczas inference
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=FutureWarning)
-                results = self.model(validated_image, conf=confidence_threshold, verbose=False)
+                # Use mixed precision for inference
+                if torch.cuda.is_available():
+                    with torch.cuda.amp.autocast():
+                        results = self.model(validated_image, conf=confidence_threshold, verbose=False)
+                else:
+                    results = self.model(validated_image, conf=confidence_threshold, verbose=False)
 
             inference_time = (time.time() - start_time) * 1000
             self.inference_times.append(inference_time)

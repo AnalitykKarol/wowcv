@@ -10,6 +10,13 @@ import win32api
 import win32con
 from typing import List, Dict, Optional, Tuple, Any, Callable
 
+# GPU acceleration imports
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
 
 # === COLOR TRIGGER CONFIGURATION ===
 TRIGGER_POINTS = [
@@ -449,11 +456,12 @@ class PlayerBarsAnalyzer:
 
     # === CORE ANALYSIS FUNCTIONS (unchanged) ===
     def extract_color_percentage(self, image_crop: np.ndarray, lower_hsv: np.ndarray, upper_hsv: np.ndarray) -> Dict[str, float]:
-        """Extract color percentage from image crop"""
+        """Extract color percentage from image crop - REVERTED to working CPU version"""
         try:
             if image_crop is None or image_crop.size == 0:
                 return {'colored_pixels': 0, 'total_pixels': 0, 'percentage': 0.0}
 
+            # Keep it simple and working on CPU
             # Convert to HSV
             hsv = cv2.cvtColor(image_crop, cv2.COLOR_RGB2HSV)
             total_pixels = hsv.shape[0] * hsv.shape[1]
