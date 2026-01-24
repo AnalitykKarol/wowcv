@@ -29,6 +29,31 @@ class ReactiveCombatController:
         self.VK_0 = 0x30  # Key for timed button 0
         self.VK_F = 0x46  # Key for timed button F
 
+        # === GLOBAL COOLDOWN SYSTEM ===
+        # Klawisze akcji objęte cooldownem
+        self.action_keys = {
+            self.VK_1, self.VK_2, self.VK_3, self.VK_4, self.VK_5,
+            self.VK_6, self.VK_7, self.VK_8, self.VK_9,  # Keys 1-9
+            self.VK_0,   # Key 0
+            self.VK_F,   # Key F
+            self.VK_R,   # Key R
+            self.VK_MINUS,   # Key -
+            self.VK_EQUALS   # Key =
+        }
+
+        # Klawisze ruchu zwolnione z cooldownu
+        self.movement_keys = {
+            self.VK_W, self.VK_A, self.VK_S, self.VK_D
+        }
+
+        # Śledzenie globalnego cooldownu
+        self.global_cooldown_duration = 1.0  # 1 sekunda
+        self.last_action_time = 0.0
+
+        # Kolejka dla zablokowanych akcji
+        self.action_queue = []
+        self.max_queue_size = 10
+
         # Main system state
         self.mode = "exploration"  # exploration, combat, grace_period
         self.last_enemy_position: Optional[Tuple[float, float]] = None
@@ -122,7 +147,7 @@ class ReactiveCombatController:
         # === CENTRALNA KONFIGURACJA SYSTEMU LECZENIA ===
         self.healing_config = {
             'emergency': {
-                'critical_threshold': 25.0,  # Aktywacja emergency w walce przy HP < 25%
+                'critical_threshold': 30.0,  # Aktywacja emergency w walce przy HP < 30%
                 'recovery_threshold': 50.0,   # Cel emergency: HP >= 50%
                 'f1_to_9_delay': random.uniform(0.07, 0.1),  # Random delay F1 → 9 (0.07-0.1s)
                 'use_f1_sequence': True,        # Użyj sekwencji F1 → 9
@@ -362,7 +387,13 @@ class ReactiveCombatController:
         """Press button 0 and schedule next - ONLY if enemy is close enough"""
         try:
             # Check distance requirement if in combat
-            if self.mode == "combat" and closest_enemy is not None:
+            if self.mode == "combat":
+                if closest_enemy is None:
+                    # Brak wroga - nie naciskaj, czekaj
+                    self.log("[TIMED] Key 0: brak enemy, czekam...")
+                    return  # Keep pending = True
+
+                # Jest enemy - sprawdź distance
                 enemy_x = closest_enemy.get('center_x', self.screen_center_x)
                 enemy_y = closest_enemy.get('center_y', self.screen_center_y)
                 dx = enemy_x - self.screen_center_x
@@ -387,14 +418,18 @@ class ReactiveCombatController:
                     dy = enemy_y - self.screen_center_y
                     distance = math.sqrt(dx*dx + dy*dy)
                     self.log(f"[TIMED] Naciśnięto 0 (distance: {distance:.0f}px, następny: {self.timed_btn_0_interval[0]}-{self.timed_btn_0_interval[1]}s)")
-                else:
-                    self.log(f"[TIMED] Naciśnięto 0 (brak enemy, następny: {self.timed_btn_0_interval[0]}-{self.timed_btn_0_interval[1]}s)")
         except Exception as e:
             self.log(f"[TIMED] Błąd naciskania 0: {e}")
 
-    def _press_timed_button_f(self, hwnd: int, current_time: float):
-        """Press button F and schedule next"""
+    def _press_timed_button_f(self, hwnd: int, current_time: float, closest_enemy=None):
+        """Press button F and schedule next - ONLY if enemy exists in combat"""
         try:
+            # Check if enemy exists in combat
+            if self.mode == "combat" and closest_enemy is None:
+                # Brak wroga - nie naciskaj, czekaj
+                self.log("[TIMED] Key F: brak enemy, czekam...")
+                return  # Keep pending = True
+
             if self.send_key_press(hwnd, self.VK_F):
                 self.timed_btn_f_last_press = current_time
                 self.timed_btn_f_next_press = current_time + random.uniform(*self.timed_btn_f_interval)
@@ -461,7 +496,7 @@ class ReactiveCombatController:
         # Check button F
         if current_time >= self.timed_btn_f_next_press:
             if self.mode == "combat":
-                self._press_timed_button_f(hwnd, current_time)
+                self._press_timed_button_f(hwnd, current_time, closest_enemy)
             else:
                 self.timed_btn_f_pending = True
                 self.log("[TIMED] Przycisk F czeka na walkę")
@@ -475,7 +510,7 @@ class ReactiveCombatController:
             self.log("[TIMED] Pending 0 naciśnięty po wejściu do walki!")
 
         if self.timed_btn_f_pending:
-            self._press_timed_button_f(hwnd, current_time)
+            self._press_timed_button_f(hwnd, current_time, closest_enemy)
             self.log("[TIMED] Pending F naciśnięty po wejściu do walki!")
 
     # === KEY 8 - MULTI-ENEMY AOE SYSTEM ===
@@ -881,8 +916,8 @@ class ReactiveCombatController:
             return False
 
     # === BASIC KEY FUNCTIONS ===
-    def send_key_down(self, hwnd: int, vk_code: int) -> bool:
-        """Send key down message"""
+    def _send_key_down_internal(self, hwnd: int, vk_code: int) -> bool:
+        """Send key down message - internal version bypassing cooldown"""
         try:
             win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
             return True
@@ -890,8 +925,8 @@ class ReactiveCombatController:
             self.log(f"❌ send_key_down failed: {e}")
             return False
 
-    def send_key_up(self, hwnd: int, vk_code: int) -> bool:
-        """Send key up message"""
+    def _send_key_up_internal(self, hwnd: int, vk_code: int) -> bool:
+        """Send key up message - internal version bypassing cooldown"""
         try:
             win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
             return True
@@ -899,16 +934,62 @@ class ReactiveCombatController:
             self.log(f"❌ send_key_up failed: {e}")
             return False
 
-    def send_key_press(self, hwnd: int, vk_code: int) -> bool:
-        """Send complete key press (down + up)"""
+    def _send_key_press_internal(self, hwnd: int, vk_code: int) -> bool:
+        """Send complete key press (down + up) - internal version bypassing cooldown"""
         try:
-            if not self.send_key_down(hwnd, vk_code):
+            if not self._send_key_down_internal(hwnd, vk_code):
                 return False
             time.sleep(0.05)
-            return self.send_key_up(hwnd, vk_code)
+            return self._send_key_up_internal(hwnd, vk_code)
         except Exception as e:
             self.log(f"❌ send_key_press failed: {e}")
             return False
+
+    def send_key_down(self, hwnd: int, vk_code: int) -> bool:
+        """Wyślij key down z cooldownem dla akcji"""
+        # Klawisze ruchu omijają cooldown
+        if self._is_movement_key(vk_code):
+            return self._send_key_down_internal(hwnd, vk_code)
+
+        # Klawisze akcji sprawdzają cooldown
+        if self._is_action_key(vk_code):
+            if self.is_on_global_cooldown():
+                self._enqueue_action(vk_code, hwnd)
+                self.log(f"[GCD] Key down queued (cooldown active)")
+                return False
+            result = self._send_key_down_internal(hwnd, vk_code)
+            if result:
+                self.last_action_time = time.time()
+            return result
+
+        # Inne klawisze omijają cooldown
+        return self._send_key_down_internal(hwnd, vk_code)
+
+    def send_key_up(self, hwnd: int, vk_code: int) -> bool:
+        """Wyślij key up z cooldownem dla akcji"""
+        # Key up nie wywołuje akcji więc zazwyczaj omija cooldown
+        # Ale dla spójności z key press, traktujemy jak key down
+        return self._send_key_up_internal(hwnd, vk_code)
+
+    def send_key_press(self, hwnd: int, vk_code: int) -> bool:
+        """Wyślij naciśnięcie klawisza z cooldownem dla akcji"""
+        # Klawisze ruchu omijają cooldown
+        if self._is_movement_key(vk_code):
+            return self._send_key_press_internal(hwnd, vk_code)
+
+        # Klawisze akcji sprawdzają cooldown
+        if self._is_action_key(vk_code):
+            if self.is_on_global_cooldown():
+                self._enqueue_action(vk_code, hwnd)
+                self.log(f"[GCD] Key queued (cooldown active)")
+                return False
+            result = self._send_key_press_internal(hwnd, vk_code)
+            if result:
+                self.last_action_time = time.time()
+            return result
+
+        # Inne klawisze omijają cooldown
+        return self._send_key_press_internal(hwnd, vk_code)
 
     def release_all_movement_keys(self, hwnd: int) -> bool:
         """Zwolnij wszystkie klawisze ruchu (W, A, S, D) - bezpieczna metoda cleanup"""
@@ -931,6 +1012,36 @@ class ReactiveCombatController:
 
         return released_any
 
+    # === GLOBAL COOLDOWN HELPER METHODS ===
+    def _is_action_key(self, vk_code: int) -> bool:
+        """Sprawdź czy klawisz jest akcją (podlega cooldownowi)"""
+        return vk_code in self.action_keys
+
+    def _is_movement_key(self, vk_code: int) -> bool:
+        """Sprawdź czy klawisz jest ruchu (zwolniony z cooldownu)"""
+        return vk_code in self.movement_keys
+
+    def is_on_global_cooldown(self) -> bool:
+        """Sprawdź czy jesteśmy w trakcie cooldownu"""
+        return (time.time() - self.last_action_time) < self.global_cooldown_duration
+
+    def _enqueue_action(self, vk_code: int, hwnd: int):
+        """Dodaj akcję do kolejki - bez duplikatów"""
+        if len(self.action_queue) < self.max_queue_size:
+            # Nie dodawaj jeśli ostatni element w kolejce to ten sam vk_code
+            if self.action_queue and self.action_queue[-1]['vk_code'] == vk_code:
+                self.log(f"[GCD] Skipping duplicate action (vk_code: {vk_code})")
+                return
+            self.action_queue.append({'vk_code': vk_code, 'hwnd': hwnd})
+
+    def _process_action_queue(self):
+        """Przetwórz kolejkę gdy cooldown minie"""
+        if self.is_on_global_cooldown() or not self.action_queue:
+            return
+        action = self.action_queue.pop(0)
+        self._send_key_press_internal(action['hwnd'], action['vk_code'])
+        self.last_action_time = time.time()
+
     # === MAIN UPDATE LOOP - UPDATED WITH NEW HP/MP RECOVERY SYSTEM ===
     def update(self, hwnd: int, detections: Optional[List[Dict[str, Any]]] = None):
         """Main update loop - APPROACH DOESN'T BLOCK ATTACKS AND STEERING"""
@@ -941,6 +1052,9 @@ class ReactiveCombatController:
             self._last_update_time = current_time
         dt = current_time - self._last_update_time
         self._last_update_time = current_time
+
+        # Process GCD action queue
+        self._process_action_queue()
 
         # === EMERGENCY HEALING CHECK - HIGHEST PRIORITY ===
         current_hp = self.get_current_hp_from_gui()
@@ -1091,6 +1205,8 @@ class ReactiveCombatController:
                     self.log("🚫 Continuous movement STOPPED for post-combat healing")
 
                     self.log(f"🏥 POST-COMBAT HEALING ACTIVATED at {current_hp:.1f}% HP (target: {regular_config['hp_target']}%)")
+                    # Blokuj wszystko od razu po aktywacji - zapobiega ponownemu wciskaniu klawiszy
+                    return
             else:
                 # W trakcie post-combat healing
                 if current_hp >= regular_config['hp_target']:
@@ -1099,6 +1215,11 @@ class ReactiveCombatController:
                     self.post_combat_healing_active = False
                     self.stats['post_combat_healing_time_total'] += healing_time
                     self.log(f"✅ Post-combat healing completed in {healing_time:.1f}s (HP: {current_hp:.1f}%)")
+
+                    # Wznów continuous movement po zakończeniu leczenia
+                    if self.continuous_movement.enabled:
+                        self.continuous_movement.start_continuous_movement(hwnd, self.send_key_down)
+                        self.log("▶️ Continuous movement RESUMED after post-combat healing")
                 else:
                     # W trakcie leczenia - naciśnij R co 2-3s
                     if current_time - self.post_combat_healing_last_r >= self.post_combat_healing_interval:
@@ -1107,8 +1228,9 @@ class ReactiveCombatController:
                             self.post_combat_healing_interval = random.uniform(2.0, 3.0)
                             self.log(f"💚 Post-combat healing R pressed (HP: {current_hp:.1f}%, next R in {self.post_combat_healing_interval:.1f}s)")
 
-                    # Post-combat healing w exploration nie blokuje innych systemów
-                    # (ale kolejne sekcje będą checkować czy healing jest aktywne)
+                    # BLOKUJ WSZYSTKO INNE PODCZAS POST-COMBAT HEALING!
+                    self.log(f"💚 Post-combat healing blocks all systems... HP: {current_hp:.1f}%")
+                    return  # Blokuj WSZYSTKO tak jak emergency healing
 
         # === RECOVERY SYSTEM DISABLED TO PREVENT INFINITE LOOP ===
         # Old recovery system was causing infinite loop and has been disabled
