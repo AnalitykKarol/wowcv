@@ -26,6 +26,8 @@ class ReactiveCombatController:
         self.VK_MINUS, self.VK_EQUALS = 0xBD, 0xBB
         self.VK_9 = 0x39  # Key for HP potion
         self.VK_R = 0x52  # Key for healing (R)
+        self.VK_0 = 0x30  # Key for timed button 0
+        self.VK_F = 0x46  # Key for timed button F
 
         # Main system state
         self.mode = "exploration"  # exploration, combat, grace_period
@@ -71,7 +73,7 @@ class ReactiveCombatController:
             self.VK_5: 0.07, self.VK_6: 0.2, self.VK_7: 0.1
         }
         self.last_attack_time = 0
-        self.attack_interval = random.uniform(5.0, 10.0)
+        self.attack_interval = random.uniform(2.0, 10.0)
 
         # Emergency backstep system
         self.emergency_distance_threshold = 80
@@ -91,6 +93,25 @@ class ReactiveCombatController:
 
         # Button sequence system ("-" and "=" keys)
         self._init_button_sequence_system()
+
+        # === TIMED BUTTON SYSTEM (0 and F keys) ===
+        self.timed_buttons_enabled = True  # Configurable
+
+        # Button 0 (120-130 sec)
+        self.timed_btn_0_interval = (120.0, 130.0)
+        self.timed_btn_0_last_press = 0.0
+        self.timed_btn_0_next_press = 0.0
+        self.timed_btn_0_pending = False  # Waiting for combat or enemy close
+        self.timed_btn_0_distance_threshold = 150  # px - enemy must be within this distance to press key 0
+
+        # Button F (180-190 sec = 3-3.5 min)
+        self.timed_btn_f_interval = (180.0, 190.0)
+        self.timed_btn_f_last_press = 0.0
+        self.timed_btn_f_next_press = 0.0
+        self.timed_btn_f_pending = False  # Waiting for combat
+
+        # Initialize timed buttons
+        self._init_timed_buttons()
 
         # Dynamic Approach System
         self.approach_system = HPBasedApproachSystem(self)
@@ -151,6 +172,22 @@ class ReactiveCombatController:
         self.post_combat_healing_interval = random.uniform(2.0, 3.0)  # 2-3s between R presses (slower than emergency)
         self.post_combat_healing_triggered = False  # Prevent re-triggering in same combat session
 
+        # === KEY 8 - MULTI-ENEMY AOE SYSTEM ===
+        self.multi_enemy_key8_enabled = True
+        self.multi_enemy_threshold = 2  # Trigger when >= 2 enemies
+        self.multi_enemy_key8_duration = random.uniform(2.0, 3.0)  # Random 2-3 seconds
+        self.multi_enemy_key8_accumulated = 0.0
+        self.multi_enemy_key8_last_press = 0
+        self.multi_enemy_key8_cooldown = random.uniform(30.0, 35.0)  # Random 30-35s
+
+        # === KEY 9 - EXPLORATION BUFF SYSTEM (press ONCE per exploration session) ===
+        self.exploration_key9_enabled = False  # Controlled by UI
+        self.exploration_key9_duration = 10.0  # Fixed 10 seconds
+        self.exploration_key9_accumulated = 0.0
+        self.exploration_key9_last_press = 0  # For display/logging only
+        self.exploration_key9_pressed_this_session = False  # Track if already pressed in current exploration session
+        self.exploration_key9_last_mode = "exploration"  # Track mode changes
+
         # Statistics
         self.stats = {
             'combat_sessions': 0,
@@ -197,6 +234,17 @@ class ReactiveCombatController:
 
         # Schedule first cycle
         self._schedule_first_button_cycle()
+
+    def _init_timed_buttons(self):
+        """Initialize the timed button system for '0' and 'F' keys"""
+        current_time = time.time()
+        self.timed_btn_0_next_press = current_time + random.uniform(*self.timed_btn_0_interval)
+        self.timed_btn_f_next_press = current_time + random.uniform(*self.timed_btn_f_interval)
+        self.timed_btn_0_last_press = 0.0
+        self.timed_btn_f_last_press = 0.0
+        self.timed_btn_0_pending = False
+        self.timed_btn_f_pending = False
+        self.log(f"[TIMED] Enabled: 0={self.timed_btn_0_interval[0]}-{self.timed_btn_0_interval[1]}s, F={self.timed_btn_f_interval[0]}-{self.timed_btn_f_interval[1]}s")
 
     def log(self, message: str):
         """Log a message if logger is available"""
@@ -310,6 +358,51 @@ class ReactiveCombatController:
             self.log(f"❌ Error pressing button '{button_name}': {e}")
             return False
 
+    def _press_timed_button_0(self, hwnd: int, current_time: float, closest_enemy=None):
+        """Press button 0 and schedule next - ONLY if enemy is close enough"""
+        try:
+            # Check distance requirement if in combat
+            if self.mode == "combat" and closest_enemy is not None:
+                enemy_x = closest_enemy.get('center_x', self.screen_center_x)
+                enemy_y = closest_enemy.get('center_y', self.screen_center_y)
+                dx = enemy_x - self.screen_center_x
+                dy = enemy_y - self.screen_center_y
+                distance = math.sqrt(dx*dx + dy*dy)
+
+                if distance > self.timed_btn_0_distance_threshold:
+                    # Enemy too far - keep pending, don't press yet
+                    self.log(f"[TIMED] Key 0: enemy too far ({distance:.0f}px > {self.timed_btn_0_distance_threshold}px), waiting...")
+                    return  # Keep pending = True
+
+            # Press key 0 (distance OK or not in combat)
+            if self.send_key_press(hwnd, self.VK_0):
+                self.timed_btn_0_last_press = current_time
+                self.timed_btn_0_next_press = current_time + random.uniform(*self.timed_btn_0_interval)
+                self.timed_btn_0_pending = False
+
+                if closest_enemy:
+                    enemy_x = closest_enemy.get('center_x', self.screen_center_x)
+                    enemy_y = closest_enemy.get('center_y', self.screen_center_y)
+                    dx = enemy_x - self.screen_center_x
+                    dy = enemy_y - self.screen_center_y
+                    distance = math.sqrt(dx*dx + dy*dy)
+                    self.log(f"[TIMED] Naciśnięto 0 (distance: {distance:.0f}px, następny: {self.timed_btn_0_interval[0]}-{self.timed_btn_0_interval[1]}s)")
+                else:
+                    self.log(f"[TIMED] Naciśnięto 0 (brak enemy, następny: {self.timed_btn_0_interval[0]}-{self.timed_btn_0_interval[1]}s)")
+        except Exception as e:
+            self.log(f"[TIMED] Błąd naciskania 0: {e}")
+
+    def _press_timed_button_f(self, hwnd: int, current_time: float):
+        """Press button F and schedule next"""
+        try:
+            if self.send_key_press(hwnd, self.VK_F):
+                self.timed_btn_f_last_press = current_time
+                self.timed_btn_f_next_press = current_time + random.uniform(*self.timed_btn_f_interval)
+                self.timed_btn_f_pending = False
+                self.log(f"[TIMED] Naciśnięto F (następny: {self.timed_btn_f_next_press - current_time:.0f}s)")
+        except Exception as e:
+            self.log(f"[TIMED] Błąd naciskania F: {e}")
+
     def update_button_sequence_system(self, hwnd: int):
         """Update the button sequence system"""
         current_time = time.time()
@@ -349,6 +442,151 @@ class ReactiveCombatController:
             self.button_sequence_stats['last_cycle_time'] = current_time
             self.button_sequence_last_cycle = current_time
             self._schedule_next_button_cycle()
+
+    def update_timed_buttons_system(self, hwnd: int, closest_enemy=None):
+        """Check and press timed buttons"""
+        if not self.timed_buttons_enabled:
+            return
+
+        current_time = time.time()
+
+        # Check button 0
+        if current_time >= self.timed_btn_0_next_press or self.timed_btn_0_pending:
+            if self.mode == "combat":
+                self._press_timed_button_0(hwnd, current_time, closest_enemy)
+            else:
+                self.timed_btn_0_pending = True
+                self.log("[TIMED] Przycisk 0 czeka na walkę")
+
+        # Check button F
+        if current_time >= self.timed_btn_f_next_press:
+            if self.mode == "combat":
+                self._press_timed_button_f(hwnd, current_time)
+            else:
+                self.timed_btn_f_pending = True
+                self.log("[TIMED] Przycisk F czeka na walkę")
+
+    def _check_pending_timed_buttons(self, hwnd: int, closest_enemy=None):
+        """Check if there are buttons waiting for combat and press them"""
+        current_time = time.time()
+
+        if self.timed_btn_0_pending:
+            self._press_timed_button_0(hwnd, current_time, closest_enemy)
+            self.log("[TIMED] Pending 0 naciśnięty po wejściu do walki!")
+
+        if self.timed_btn_f_pending:
+            self._press_timed_button_f(hwnd, current_time)
+            self.log("[TIMED] Pending F naciśnięty po wejściu do walki!")
+
+    # === KEY 8 - MULTI-ENEMY AOE SYSTEM ===
+    def update_multi_enemy_key8_system(self, hwnd: int, enemies: List, current_time: float, dt: float):
+        """Handle key 8 pressing for multiple enemies (random 2-3s, cooldown 30-35s)"""
+
+        # DEBUG: Log enemy count every second (approx)
+        if not hasattr(self, '_key8_debug_counter'):
+            self._key8_debug_counter = 0
+        self._key8_debug_counter += dt
+        if self._key8_debug_counter >= 1.0:  # Log every second
+            self._key8_debug_counter = 0
+            enemy_count = len(enemies)
+            cooldown_remaining = max(0, self.multi_enemy_key8_cooldown - (current_time - self.multi_enemy_key8_last_press)) if self.multi_enemy_key8_last_press > 0 else 0
+            status = ""
+            if enemy_count > 0:
+                status = f" | enemies: {enemy_count}"
+            if cooldown_remaining > 0:
+                status += f" | CD: {cooldown_remaining:.1f}s"
+            if self.mode == "combat" and enemy_count >= 1:
+                self.log(f"🔍 Key8: mode={self.mode}{status}")
+
+        # Check if we should be tracking
+        if self.mode != "combat" or len(enemies) < self.multi_enemy_threshold:
+            self.multi_enemy_key8_accumulated = 0.0
+            return
+
+        # Check cooldown
+        if current_time - self.multi_enemy_key8_last_press < self.multi_enemy_key8_cooldown:
+            return
+
+        # Accumulate time
+        self.multi_enemy_key8_accumulated += dt
+
+        # Press key 8 when threshold reached
+        if self.multi_enemy_key8_accumulated >= self.multi_enemy_key8_duration:
+            if self.send_key_press(hwnd, self.VK_8):
+                self.multi_enemy_key8_last_press = current_time
+                # Randomize next threshold and cooldown
+                self.multi_enemy_key8_duration = random.uniform(2.0, 3.0)
+                self.multi_enemy_key8_cooldown = random.uniform(30.0, 35.0)
+                self.multi_enemy_key8_accumulated = 0.0
+                self.log(f"🎯 Key 8 pressed ({len(enemies)} enemies, next in {self.multi_enemy_key8_cooldown:.1f}s)")
+
+    # === KEY 9 - EXPLORATION BUFF SYSTEM ===
+    def update_exploration_key9_system(self, hwnd: int, current_time: float, dt: float):
+        """Handle key 9 pressing in exploration mode (press ONCE per exploration session)"""
+        # Check mode changes - reset if we left exploration and came back
+        if self.mode != self.exploration_key9_last_mode:
+            # Mode changed!
+            if self.exploration_key9_last_mode != "exploration" and self.mode == "exploration":
+                # We just entered exploration - reset for new session
+                self.exploration_key9_pressed_this_session = False
+                self.exploration_key9_accumulated = 0.0
+                self.log(f"🔄 Key 9: Entered exploration - reset for new session")
+            self.exploration_key9_last_mode = self.mode
+
+        if not self.exploration_key9_enabled:
+            self.exploration_key9_accumulated = 0.0
+            self.exploration_key9_pressed_this_session = False
+            return
+
+        if self.mode != "exploration":
+            self.exploration_key9_accumulated = 0.0
+            # Don't reset pressed_this_session here - only reset when re-entering exploration
+            return
+
+        # Already pressed this session? Don't press again until mode change
+        if self.exploration_key9_pressed_this_session:
+            return
+
+        # Accumulate time
+        self.exploration_key9_accumulated += dt
+
+        # Press key 9 when threshold reached (once per exploration session)
+        if self.exploration_key9_accumulated >= self.exploration_key9_duration:
+            if self.send_key_press(hwnd, self.VK_9):
+                self.exploration_key9_last_press = current_time  # Only for display
+                self.exploration_key9_pressed_this_session = True  # Mark as pressed - won't press again this session
+                self.exploration_key9_accumulated = 0.0
+                self.log(f"🔄 Key 9 pressed (will press again after combat → exploration)")
+
+    def set_exploration_key9_enabled(self, enabled: bool):
+        """Enable/disable exploration key 9 system (called from GUI)"""
+        self.exploration_key9_enabled = enabled
+        self.exploration_key9_accumulated = 0.0  # Reset when toggling
+        self.log(f"🔧 Exploration Key 9: {'ENABLED' if enabled else 'DISABLED'}")
+
+    def get_multi_enemy_key8_status(self) -> Dict:
+        """Get status for GUI display"""
+        current_time = time.time()
+        cooldown_remaining = 0
+        if self.multi_enemy_key8_last_press > 0:
+            cooldown_remaining = max(0, self.multi_enemy_key8_cooldown - (current_time - self.multi_enemy_key8_last_press))
+        return {
+            'enabled': self.multi_enemy_key8_enabled,
+            'accumulated': self.multi_enemy_key8_accumulated,
+            'threshold': self.multi_enemy_key8_duration,
+            'cooldown_remaining': cooldown_remaining,
+            'last_press': self.multi_enemy_key8_last_press
+        }
+
+    def get_exploration_key9_status(self) -> Dict:
+        """Get status for GUI display"""
+        return {
+            'enabled': self.exploration_key9_enabled,
+            'accumulated': self.exploration_key9_accumulated,
+            'threshold': self.exploration_key9_duration,
+            'last_press': self.exploration_key9_last_press,
+            'pressed_this_session': self.exploration_key9_pressed_this_session
+        }
 
     def get_button_sequence_status(self) -> str:
         """Get current status of button sequence system"""
@@ -698,6 +936,12 @@ class ReactiveCombatController:
         """Main update loop - APPROACH DOESN'T BLOCK ATTACKS AND STEERING"""
         current_time = time.time()
 
+        # Track delta time for key8/key9 systems
+        if not hasattr(self, '_last_update_time'):
+            self._last_update_time = current_time
+        dt = current_time - self._last_update_time
+        self._last_update_time = current_time
+
         # === EMERGENCY HEALING CHECK - HIGHEST PRIORITY ===
         current_hp = self.get_current_hp_from_gui()
         emergency_config = self.healing_config['emergency']
@@ -876,17 +1120,22 @@ class ReactiveCombatController:
 
         # ANALYZING nie blokuje - można kontynuować
 
-        # === UPDATE INNYCH SYSTEMÓW (tylko jeśli żaden recovery nie blokuje) ===
-        self.update_button_sequence_system(hwnd)
-        self.update_camera_adjustment(hwnd)
-        self.update_emergency_backstep(hwnd)
-
-        # === ZNAJDŹ NAJBLIŻSZEGO WROGA ===
+        # === ZNAJDŹ NAJBLIŻSZEGO WROGA (przed timed buttons - potrzebne dla Key 0 distance check) ===
         closest_enemy = None
         if enemies:
             closest_enemy = min(enemies, key=lambda e:
             abs(e.get('center_x', self.screen_center_x) - self.screen_center_x) +
             abs(e.get('center_y', self.screen_center_y) - self.screen_center_y))
+
+        # === UPDATE INNYCH SYSTEMÓW (tylko jeśli żaden recovery nie blokuje) ===
+        self.update_button_sequence_system(hwnd)
+        self.update_timed_buttons_system(hwnd, closest_enemy)  # Przekazujemy closest_enemy dla Key 0
+        self.update_camera_adjustment(hwnd)
+        self.update_emergency_backstep(hwnd)
+
+        # === KEY 8 and KEY 9 SYSTEMS ===
+        self.update_multi_enemy_key8_system(hwnd, enemies, current_time, dt)
+        self.update_exploration_key9_system(hwnd, current_time, dt)
 
         # === APPROACH SYSTEM - NOWA LOGIKA: NIE BLOKUJE ATAKÓW I SKRĘCANIA ===
         approach_active = False
@@ -935,6 +1184,9 @@ class ReactiveCombatController:
                 self.log("🎯 Enemy detected - entering combat")
                 self.mode = "combat"
                 self.stats['combat_sessions'] += 1
+
+                # Check for pending timed buttons (with closest_enemy for distance check)
+                self._check_pending_timed_buttons(hwnd, closest_enemy)
 
                 # NOWE: Zwolnij WSZYSTKIE klawisze ruchu
                 self.release_all_movement_keys(hwnd)
@@ -1098,6 +1350,20 @@ class ReactiveCombatController:
         else:
             self.log("📋 Buttons '-' and '=': DISABLED")
 
+    def configure_timed_buttons(self, enabled: bool = True,
+                               btn_0_interval: Tuple[float, float] = (120.0, 130.0),
+                               btn_f_interval: Tuple[float, float] = (180.0, 190.0)):
+        """Configure timed buttons"""
+        self.timed_buttons_enabled = enabled
+        self.timed_btn_0_interval = btn_0_interval
+        self.timed_btn_f_interval = btn_f_interval
+
+        if enabled:
+            self._init_timed_buttons()
+            self.log(f"[TIMED] Enabled: 0={btn_0_interval[0]}-{btn_0_interval[1]}s, F={btn_f_interval[0]}-{btn_f_interval[1]}s")
+        else:
+            self.log("[TIMED] Disabled")
+
     def get_button_sequence_stats(self) -> Dict[str, Any]:
         """Get detailed button sequence statistics"""
         current_time = time.time()
@@ -1118,6 +1384,23 @@ class ReactiveCombatController:
             'next_cycle_formatted': self.get_button_sequence_status(),
             'interval_minutes': self.button_sequence_interval_base / 60,
             'variance_minutes': self.button_sequence_interval_variance / 60
+        }
+
+    def get_timed_buttons_status(self) -> Dict[str, Any]:
+        """Get status of timed buttons"""
+        current_time = time.time()
+        return {
+            'enabled': self.timed_buttons_enabled,
+            'button_0': {
+                'next_press': self.timed_btn_0_next_press,
+                'seconds_until': max(0, self.timed_btn_0_next_press - current_time),
+                'pending': self.timed_btn_0_pending
+            },
+            'button_f': {
+                'next_press': self.timed_btn_f_next_press,
+                'seconds_until': max(0, self.timed_btn_f_next_press - current_time),
+                'pending': self.timed_btn_f_pending
+            }
         }
 
     def get_stats(self) -> Dict[str, Any]:

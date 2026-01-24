@@ -396,12 +396,14 @@ class OptimizedYOLODetector:
             # Wycisz ostrzeżenia podczas inference
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=FutureWarning)
-                # Use mixed precision for inference
+                # Use mixed precision for inference with proper NMS parameters
+                # iou=0.5 ensures proper Non-Maximum Suppression to remove duplicate detections
+                # max_det=300 sets maximum detections per image
                 if torch.cuda.is_available():
                     with torch.cuda.amp.autocast():
-                        results = self.model(validated_image, conf=confidence_threshold, verbose=False)
+                        results = self.model(validated_image, conf=confidence_threshold, iou=0.5, max_det=300, verbose=False)
                 else:
-                    results = self.model(validated_image, conf=confidence_threshold, verbose=False)
+                    results = self.model(validated_image, conf=confidence_threshold, iou=0.5, max_det=300, verbose=False)
 
             inference_time = (time.time() - start_time) * 1000
             self.inference_times.append(inference_time)

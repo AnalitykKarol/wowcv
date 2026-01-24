@@ -63,6 +63,10 @@ class MainWindow:
         self.mana_value_label = None
         self.bars_last_update_label = None
 
+        # Key 9 exploration buff toggle
+        self.key9_toggle_btn = None
+        self.key9_status_label = None
+
         # NOWE: Pozycje pasków (domyślne wartości)
         self.hp_x_var = tk.StringVar(value="120")
         self.hp_y_var = tk.StringVar(value="62")
@@ -279,6 +283,28 @@ class MainWindow:
                 except Exception as e:
                     diagnostic_text += f"⚔️ COMBAT CONTROLLER: Błąd diagnostyki - {str(e)}\n\n"
 
+            # Key 8 and Key 9 Systems Status
+            if self.combat_controller:
+                try:
+                    key8_status = self.combat_controller.get_multi_enemy_key8_status()
+                    key9_status = self.combat_controller.get_exploration_key9_status()
+
+                    diagnostic_text += "🔑 KEY SYSTEMS:\n"
+                    diagnostic_text += f"  Key 8 (Multi-enemy): {'✅' if key8_status['enabled'] else '❌'}\n"
+                    if key8_status['accumulated'] > 0:
+                        diagnostic_text += f"    Accumulated: {key8_status['accumulated']:.1f}/{key8_status['threshold']}s\n"
+                    if key8_status['cooldown_remaining'] > 0:
+                        diagnostic_text += f"    Cooldown: {key8_status['cooldown_remaining']:.1f}s\n"
+
+                    diagnostic_text += f"  Key 9 (Exploration): {'✅' if key9_status['enabled'] else '❌'}\n"
+                    if key9_status['accumulated'] > 0:
+                        diagnostic_text += f"    Accumulated: {key9_status['accumulated']:.1f}/{key9_status['threshold']}s\n"
+                    if key9_status.get('pressed_this_session', False):
+                        diagnostic_text += f"    Status: Already pressed (wait for mode change)\n"
+                    diagnostic_text += "\n"
+                except Exception as e:
+                    diagnostic_text += f"🔑 KEY SYSTEMS: Błąd diagnostyki - {str(e)}\n\n"
+
             # Aplikacja Stats
             diagnostic_text += "📱 APLIKACJA:\n"
             diagnostic_text += f"  Wybrane okno: {self.selected_window['title'] if self.selected_window else 'Brak'}\n"
@@ -470,6 +496,28 @@ class MainWindow:
         combat_info = ttk.Label(combat_frame, text="ℹ️ Walka wymaga włączonego YOLOv8 Detection",
                               font=('Arial', 9), foreground='gray')
         combat_info.pack(anchor='w', pady=(2, 0))
+
+        # === KEY 9 EXPLORATION BUFF SECTION ===
+        key9_frame = ttk.LabelFrame(combat_frame, text="🔑 Key 9 - Exploration Buff")
+        key9_frame.pack(fill='x', pady=(10, 0))
+
+        key9_info = ttk.Label(key9_frame,
+            text="Naciśnij klawisz 9 po 10 sekund w exploration mode",
+            font=('Arial', 9), foreground='gray')
+        key9_info.pack(anchor='w', pady=(5, 0))
+
+        key9_btn_frame = ttk.Frame(key9_frame)
+        key9_btn_frame.pack(fill='x', pady=(5, 0))
+
+        self.key9_toggle_btn = ttk.Button(key9_btn_frame,
+            text="🔴 Key 9: Wyłączony",
+            command=self.toggle_key9_exploration)
+        self.key9_toggle_btn.pack(side='left', padx=(0, 5))
+
+        self.key9_status_label = ttk.Label(key9_frame,
+            text="Status: Wyłączony",
+            font=('Arial', 9), foreground='red')
+        self.key9_status_label.pack(anchor='w', pady=(5, 0))
 
         # === SEKCJA LOGÓW ===
         log_frame = ttk.LabelFrame(control_frame, text="📋 Logi systemowe", padding=15)
@@ -1550,6 +1598,25 @@ Błąd: {model_info.get('error', 'Nieznany błąd')}"""
                 self.combat_controller.emergency_stop(self.selected_window['hwnd'])
 
             self.log_message("⏹️ Tryb walki wyłączony")
+
+    def toggle_key9_exploration(self):
+        """Włącza/wyłącza system key 9 w exploration mode"""
+        if not hasattr(self, 'combat_controller'):
+            return
+
+        current_state = self.combat_controller.exploration_key9_enabled
+        new_state = not current_state
+
+        self.combat_controller.set_exploration_key9_enabled(new_state)
+
+        if new_state:
+            self.key9_toggle_btn.config(text="🟢 Key 9: Włączony")
+            self.key9_status_label.config(text="Status: Włączony", foreground='green')
+            self.log_message("🟢 Key 9 Exploration system włączony")
+        else:
+            self.key9_toggle_btn.config(text="🔴 Key 9: Wyłączony")
+            self.key9_status_label.config(text="Status: Wyłączony", foreground='red')
+            self.log_message("🔴 Key 9 Exploration system wyłączony")
 
     def draw_detections_on_image(self, image, detections):
         """
